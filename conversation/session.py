@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -78,6 +79,37 @@ class SessionState:
 
 _SESSIONS: dict[int, SessionState] = {}
 _redis_client: redis.Redis | None = None
+# Tracks the SessionState objects used while one inbound webhook is handled.
+# Redis deserializes a fresh object per read, so saving this scope at the end
+# of handling is necessary to persist changes made immediately before a return.
+_ACTIVE_SESSION_SCOPE: ContextVar[dict[int, SessionState] | None] = ContextVar(
+    "active_session_scope",
+    default=None,
+)
+
+
+def begin_session_scope() -> Token[dict[int, SessionState] | None]:
+    return _ACTIVE_SESSION_SCOPE.set({})
+
+
+def end_session_scope(token: Token[dict[int, SessionState] | None]) -> None:
+    _ACTIVE_SESSION_SCOPE.reset(token)
+
+
+def _track_session(session: SessionState, *, replace: bool = False) -> SessionState:
+    scope = _ACTIVE_SESSION_SCOPE.get()
+    if scope is not None:
+        if replace or session.chat_id not in scope:
+            scope[session.chat_id] = session
+    return session
+
+
+async def save_active_sessions() -> None:
+    scope = _ACTIVE_SESSION_SCOPE.get()
+    if scope is None:
+        return
+    for session in scope.values():
+        await save_session(session)
 
 
 def _get_redis() -> redis.Redis | None:
@@ -94,12 +126,16 @@ def _redis_key(chat_id: int) -> str:
 
 
 async def get_session(chat_id: int) -> SessionState:
+    active_scope = _ACTIVE_SESSION_SCOPE.get()
+    if active_scope is not None and chat_id in active_scope:
+        return active_scope[chat_id]
+
     client = _get_redis()
     if client is not None:
         try:
             raw = await client.get(_redis_key(chat_id))
             if raw:
-                return SessionState.from_dict(json.loads(raw))
+                return _track_session(SessionState.from_dict(json.loads(raw)))
         except Exception as exc:
             if settings.require_redis:
                 raise RuntimeError("Redis session store is unavailable") from exc
@@ -109,10 +145,11 @@ async def get_session(chat_id: int) -> SessionState:
     if session is None:
         session = SessionState(chat_id=chat_id)
         _SESSIONS[chat_id] = session
-    return session
+    return _track_session(session)
 
 
 async def save_session(session: SessionState) -> None:
+    _track_session(session, replace=True)
     client = _get_redis()
     if client is not None:
         try:
@@ -132,7 +169,7 @@ async def save_session(session: SessionState) -> None:
 async def reset_session(chat_id: int) -> SessionState:
     session = SessionState(chat_id=chat_id)
     await save_session(session)
-    return session
+    return _track_session(session)
 
 
 async def check_session_store() -> bool:

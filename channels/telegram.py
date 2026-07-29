@@ -106,6 +106,7 @@ def parse_callback_query_update(update: dict[str, Any]) -> IncomingMessage | Non
             "platform": "telegram",
             "raw_update": update,
             "callback_query_id": callback_query.get("id"),
+            "is_menu_selection": data.startswith("menu_"),
         },
     )
 

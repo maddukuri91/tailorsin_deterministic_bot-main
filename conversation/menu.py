@@ -47,40 +47,34 @@ def _icon(intent: str) -> str:
 #  Common options (shared across segments)
 # ──────────────────────────────────────────────
 
-COMMON_OPTIONS: list[dict[str, str]] = [
-    {"label": "Book a store visit",           "intent": "book_visit"},
-    {"label": "Report an issue / Alteration", "intent": "alteration_pickup_recent"},
-    {"label": "Estimate fabric & price",      "intent": "fabric_estimate"},
-    {"label": "View price catalog",           "intent": "pricing"},
-    {"label": "Update my address",            "intent": "address_update"},
-    {"label": "Chat with a human agent",      "intent": "handover"},
+COMMON_OPTIONS = [
+    {"label": "Book Visit",      "intent": "book_visit"},
+    {"label": "Report Issue",    "intent": "alteration_pickup_recent"},
+    {"label": "Price Estimate",  "intent": "fabric_estimate"},
+    {"label": "Price Catalog",   "intent": "pricing"},
+    {"label": "Update Address",  "intent": "address_update"},
+    {"label": "Human Support",   "intent": "handover"},
 ]
 
-# ──────────────────────────────────────────────
-#  Menu data
-#  Keys are unique identifiers, numbers are NOT shown to the customer.
-#  Navigation is done purely through inline tap buttons.
-# ──────────────────────────────────────────────
-
-SEGMENT_MENU_OPTIONS: dict[str, list[dict[str, str]]] = {
+SEGMENT_MENU_OPTIONS = {
 
     "active_client": [
-        {"label": "Track my current order",      "intent": "order_status"},
-        {"label": "Modify my order",             "intent": "order_changes"},
-        {"label": "Cancel my order",             "intent": "order_cancel"},
-        {"label": "Place a new order / Pickup",  "intent": "new_order"},
+        {"label": "Track Order",  "intent": "order_status"},
+        {"label": "Modify Order", "intent": "order_changes"},
+        {"label": "Cancel Order", "intent": "order_cancel"},
+        {"label": "New Order",    "intent": "new_order"},
         *COMMON_OPTIONS,
     ],
 
     "client": [
-        {"label": "Place an order / Pickup",      "intent": "new_order"},
-        {"label": "Drop off fabric at store",     "intent": "fabric_delivery"},
+        {"label": "New Order",      "intent": "new_order"},
+        {"label": "Drop Fabric",    "intent": "fabric_delivery"},
         *COMMON_OPTIONS,
     ],
 
     "new_user": [
-        {"label": "Learn about tailorsin.com",    "intent": "about"},
-        {"label": "Register to place an order / book a visit", "intent": "register"},
+        {"label": "About Us", "intent": "about"},
+        {"label": "Sign Up",  "intent": "register"},
     ],
 }
 
@@ -150,7 +144,7 @@ def format_menu_message_with_greeting(
             "👋 *Welcome back!*",
             f"Hello {salutation}, great to see you again at **tailorsin.com** ✨",
             "",
-            "I'm your AI assistant. How can I help you today?",
+            "I'm your AI assistant. I can help you track your orders, schedule pickups, and more.",
             "",
         ])
     else:
@@ -158,13 +152,13 @@ def format_menu_message_with_greeting(
             "👋 *Welcome to tailorsin.com!*",
             "",
             "We bring professional tailoring to your doorstep. "
-            "Here's everything you can do to get started 👇",
+            "Get your clothes tailored with ease, right from your home.",
             "",
         ])
 
     lines.extend([
         "—",
-        "Select an option below to get started ⬇️",
+        "Select an option below ⬇️",
     ])
 
     return "\n".join(lines)
@@ -221,16 +215,16 @@ def get_menu_reply_keyboard(client_type: str | None) -> list[list[dict[str, str]
 
 
 def get_nav_inline_keyboard() -> list[list[dict[str, str]]]:
-    """Return an inline keyboard with just navigation buttons (handover & main menu)."""
+    """Return the two standard navigation actions used on every channel."""
     return [
-        [{"text": "💬 Chat with a human agent", "callback_data": "menu_handover"}],
-        [{"text": "🏠 Go back to main menu", "callback_data": "menu_main_menu"}],
+        [{"text": "Main menu", "callback_data": "menu_main_menu"}],
+        [{"text": "Human support", "callback_data": "menu_handover"}],
     ]
 
 
 def get_nav_reply_keyboard() -> list[list[dict[str, str]]]:
-    """Return a reply keyboard with just navigation buttons for non-inline platforms."""
+    """Return the same two standard navigation actions for reply keyboards."""
     return [
-        [{"text": "💬 Chat with a human agent"}],
-        [{"text": "🏠 Go back to main menu"}],
+        [{"text": "Main menu"}],
+        [{"text": "Human support"}],
     ]

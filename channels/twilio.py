@@ -34,7 +34,7 @@ TWILIO_MAX_SEND_ATTEMPTS = 3
 WHATSAPP_NAVIGATION_MARKUP: dict[str, Any] = {
     "inline_keyboard": [[
         {"text": "Main menu", "callback_data": "menu_main_menu"},
-        {"text": "Talk to an agent", "callback_data": "menu_handover"},
+        {"text": "Human support", "callback_data": "menu_handover"},
     ]]
 }
 

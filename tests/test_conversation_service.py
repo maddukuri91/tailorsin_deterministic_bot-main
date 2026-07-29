@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 import services.conversation_service as svc
-from conversation.session import reset_session
+from conversation.session import get_session, reset_session, save_session
 from services.conversation_service import IncomingMessage
 
 CHAT_ID = 70001
@@ -61,6 +61,35 @@ def test_start_command_returns_menu():
     out = run(make_message("/start"))
     assert out, "expected at least one outgoing message"
     assert "Welcome" in out[0].text or "menu" in out[0].text.lower()
+
+
+def test_about_response_sends_the_complete_overview_in_provider_safe_sections():
+    responses = asyncio.get_event_loop().run_until_complete(
+        svc.build_intent_response("about", "new_user")
+    )
+
+    assert responses is not None
+    assert len(responses) == 2
+    assert all(len(response.text) <= 1024 for response in responses)
+    assert "\n\n".join(response.text for response in responses) == svc.TAILORSIN_OVERVIEW.strip()
+    assert responses[0].reply_markup is None
+    assert responses[0].include_wati_navigation is False
+    assert responses[-1].reply_markup is not None
+
+
+def test_selection_builders_always_include_standard_navigation():
+    builders = [
+        svc.build_selection_reply_markup(["One", "Two"]),
+        svc.build_pickup_date_reply_markup(),
+        svc.build_pickup_time_reply_markup(),
+        svc.build_visit_slot_reply_markup(["10:00 AM", "2:00 PM"]),
+        svc.build_number_selection_reply_markup(2, include_add_address=True),
+        svc.build_location_choice_reply_markup(),
+    ]
+
+    for markup in builders:
+        labels = [button["text"] for row in markup["keyboard"] for button in row]
+        assert labels[-2:] == ["Main menu", "Human support"]
 
 
 def test_unknown_text_prompts_menu():
@@ -122,6 +151,45 @@ def test_new_order_flow_with_address_lists_then_pickup_date():
     assert "Saved addresses" in texts or "pickup" in texts.lower()
 
 
+def test_pickup_address_add_enters_single_address_capture_step():
+    async def prepare_pickup_address_step():
+        session = await get_session(CHAT_ID)
+        session.awaiting_pickup_address = True
+        session.pending_pickup_date = "2026-08-01"
+        session.pending_pickup_time = 1
+        await save_session(session)
+
+    asyncio.get_event_loop().run_until_complete(prepare_pickup_address_step())
+    out = run(make_message("add"))
+
+    assert len(out) == 1
+    assert "address line" in out[0].text.lower()
+
+    session = asyncio.get_event_loop().run_until_complete(get_session(CHAT_ID))
+    assert session.awaiting_pickup_address is False
+    assert session.awaiting_address_add_line is True
+    assert session.address_needed_for_pickup is True
+
+
+def test_wati_numbered_address_selection_advances_to_pickup_date():
+    async def prepare_pickup_address_step():
+        session = await get_session(CHAT_ID)
+        session.awaiting_pickup_address = True
+        session.pending_address_ordered_ids = [11]
+        await save_session(session)
+
+    asyncio.get_event_loop().run_until_complete(prepare_pickup_address_step())
+    out = run(make_message("1", metadata={"platform": "wati", "is_menu_selection": True}))
+
+    assert len(out) == 1
+    assert "choose pickup date" in out[0].text.lower()
+
+    session = asyncio.get_event_loop().run_until_complete(get_session(CHAT_ID))
+    assert session.awaiting_pickup_address is False
+    assert session.awaiting_pickup_date is True
+    assert session.pending_pickup_address_id == 11
+
+
 def test_pickup_date_parsing():
     assert svc.parse_pickup_date_option("1") is not None
     assert svc.parse_pickup_date_option("not-a-date") is None
@@ -130,6 +198,8 @@ def test_pickup_date_parsing():
 def test_pickup_time_parsing():
     assert svc.parse_pickup_time_option("1") == 1
     assert svc.parse_pickup_time_option("morning") == 1
+    assert svc.parse_pickup_time_option("1. Morning (9 AM - 2") == 1
+    assert svc.parse_pickup_time_option("Choose pickup time slot:\n2. Afternoon (2 PM -") == 2
     assert svc.parse_pickup_time_option("bogus") is None
 
 

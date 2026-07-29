@@ -1,4 +1,4 @@
-from conversation.intent_router import get_intent
+from conversation.intent_router import _strip_emoji, get_intent
 from conversation.menu import get_menu_options
 
 
@@ -16,8 +16,9 @@ def test_direct_menu_number_match():
 
 def test_menu_label_match_case_insensitive():
     client_type = "active_client"
-    assert get_intent(client_type, "Track my current order") == "order_status"
-    assert get_intent(client_type, "1. Track my current order") == "order_status"
+    label = get_menu_options(client_type)[0]["label"]
+    assert get_intent(client_type, label) == "order_status"
+    assert get_intent(client_type, f"1. {label}") == "order_status"
 
 
 def test_footer_intent():
@@ -50,3 +51,26 @@ def test_all_menu_options_resolve_to_known_intents():
         # Test that each intent name can be resolved
         for item in menu:
             assert get_intent(client_type, item["intent"]) == item["intent"]
+
+
+def test_all_menu_options_accept_wati_shortened_labels():
+    for client_type in ["active_client", "client", "new_user"]:
+        for item in get_menu_options(client_type):
+            plain_label = _strip_emoji(item["label"])
+            assert get_intent(client_type, plain_label[:24]) == item["intent"]
+            assert get_intent(client_type, plain_label[:20]) == item["intent"]
+
+
+def test_wati_menu_labels_fit_with_icons_and_resolve():
+    for client_type in ["active_client", "client", "new_user"]:
+        for item in get_menu_options(client_type):
+            # WATI allows a 20-character button title. The icon and separator
+            # consume three characters, so the new labels never truncate.
+            assert len(f"• {item['label']}") <= 20
+            assert get_intent(client_type, item["label"]) == item["intent"]
+
+
+def test_wati_quoted_navigation_reply_resolves_from_last_line():
+    quoted_reply = "Please share a short note for fabric delivery.\nGo back to main menu"
+    assert get_intent("client", quoted_reply) == "main_menu"
+    assert get_intent("client", "Chat with a human ag") == "handover"

@@ -14,7 +14,14 @@ from conversation.menu import (
     get_nav_inline_keyboard,
     get_nav_reply_keyboard,
 )
-from conversation.session import get_session, reset_session, save_session
+from conversation.session import (
+    begin_session_scope,
+    end_session_scope,
+    get_session,
+    reset_session,
+    save_active_sessions,
+    save_session,
+)
 from conversation.state_manager import (
     get_client_profile,
     mark_awaiting_contact,
@@ -51,7 +58,8 @@ logger = logging.getLogger(__name__)
 
 
 def with_footer(text: str) -> str:
-    return f"{text}\n\n—\ntailorsin.com"
+    """Keep existing response calls concise without adding a visible footer."""
+    return text
 
 
 TAILORSIN_OVERVIEW = (
@@ -107,6 +115,16 @@ https://drive.google.com/file/d/1s67qOzn2n22lN670ir0Le462FcgGyCGL/view?usp=shari
 """
 )
 
+# WATI/WhatsApp permits at most 1,024 characters in an interactive-message
+# body. Keep the overview in two deliberate, readable sections so no service
+# information is silently truncated by the provider.
+_OVERVIEW_SPLIT_MARKER = "*Delivery Timeline*"
+_overview_split_at = TAILORSIN_OVERVIEW.index(_OVERVIEW_SPLIT_MARKER)
+TAILORSIN_OVERVIEW_SECTIONS = (
+    TAILORSIN_OVERVIEW[:_overview_split_at].strip(),
+    TAILORSIN_OVERVIEW[_overview_split_at:].strip(),
+)
+
 
 @dataclass
 class IncomingMessage:
@@ -125,16 +143,22 @@ class IncomingMessage:
 class OutgoingMessage:
     text: str
     reply_markup: dict[str, Any] | None = None
+    include_wati_navigation: bool = True
 
 
 async def build_intent_response(intent_name: str, client_type: str) -> list[OutgoingMessage] | None:
     if intent_name == "about":
-        return [
+        sections = [
+            OutgoingMessage(text=text, include_wati_navigation=False)
+            for text in TAILORSIN_OVERVIEW_SECTIONS[:-1]
+        ]
+        sections.append(
             OutgoingMessage(
-                text=TAILORSIN_OVERVIEW,
+                text=TAILORSIN_OVERVIEW_SECTIONS[-1],
                 reply_markup=build_menu_reply_markup(client_type),
             )
-        ]
+        )
+        return sections
 
     if intent_name == "browse":
         return [
@@ -231,7 +255,10 @@ async def resolve_client_type(
 
 def build_contact_keyboard() -> dict[str, Any]:
     return {
-        "keyboard": [[{"text": "Share mobile number", "request_contact": True}]],
+        "keyboard": [
+            [{"text": "Share mobile number", "request_contact": True}],
+            *get_nav_reply_keyboard(),
+        ],
         "resize_keyboard": True,
         "one_time_keyboard": True,
     }
@@ -251,20 +278,68 @@ def build_nav_keyboard() -> dict[str, Any]:
     }
 
 
-def build_pickup_time_reply_markup() -> dict[str, Any]:
+def build_selection_reply_markup(options: list[str]) -> dict[str, Any]:
+    """Build a consistent selection UI for Telegram and WhatsApp.
+
+    Every selectable step shows one option per row followed by the same two
+    escape actions. WATI converts this structure to buttons or a list as
+    appropriate; Telegram renders it as a reply keyboard.
+    """
     return {
         "keyboard": [
-            [{"text": "1. Morning (9 AM - 2 PM)"}],
-            [{"text": "2. Afternoon (2 PM - 9 PM)"}],
-            [{"text": "← Back to main menu"}],
+            *[[{"text": option}] for option in options],
+            *get_nav_reply_keyboard(),
         ],
         "resize_keyboard": True,
         "one_time_keyboard": True,
     }
 
 
+def build_number_selection_reply_markup(count: int, *, include_add_address: bool = False) -> dict[str, Any]:
+    options = [str(index) for index in range(1, count + 1)]
+    if include_add_address:
+        options.append("Add address")
+    return build_selection_reply_markup(options)
+
+
+def build_location_choice_reply_markup() -> dict[str, Any]:
+    """Offer the same location choices on Telegram and WhatsApp."""
+    return {
+        "keyboard": [
+            [{"text": "Share location", "request_location": True}],
+            [{"text": "Enter location manually"}],
+            [{"text": "Skip location"}],
+            *get_nav_reply_keyboard(),
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+    }
+
+
+def build_pickup_time_reply_markup() -> dict[str, Any]:
+    return build_selection_reply_markup([
+        "1. Morning (9 AM - 2 PM)",
+        "2. Afternoon (2 PM - 9 PM)",
+    ])
+
+
 def parse_pickup_time_option(raw_text: str) -> int | None:
     normalized_text = (raw_text or "").strip().casefold()
+    # WATI interactive buttons allow only 20 title characters, so WhatsApp
+    # sends values such as "1. Morning (9 AM - 2". It may also quote the
+    # earlier message and append that selected value on the final line.
+    candidates = [normalized_text]
+    candidates.extend(
+        line.strip().casefold()
+        for line in (raw_text or "").splitlines()
+        if line.strip()
+    )
+    for candidate in reversed(candidates):
+        if candidate.startswith("1.") or candidate == "1":
+            return 1
+        if candidate.startswith("2.") or candidate == "2":
+            return 2
+
     if normalized_text in {
         "1",
         "1. 9am-2pm",
@@ -293,20 +368,11 @@ def get_pickup_date_choices() -> list[tuple[str, str]]:
 
 def build_pickup_date_reply_markup() -> dict[str, Any]:
     choices = get_pickup_date_choices()
-    return {
-        "keyboard": [
-            [{"text": f"{index}. {value}"}] for index, value in choices
-        ] + [[{"text": "← Back to main menu"}]],
-        "resize_keyboard": True,
-        "one_time_keyboard": True,
-    }
+    return build_selection_reply_markup([f"{index}. {value}" for index, value in choices])
 
 
 def parse_pickup_date_option(raw_text: str) -> str | None:
     normalized_text = (raw_text or "").strip()
-
-    if normalized_text == "← Back to main menu":
-        return None
 
     choice_lookup = {index: value for index, value in get_pickup_date_choices()}
 
@@ -330,13 +396,9 @@ def parse_pickup_date_option(raw_text: str) -> str | None:
 
 
 def build_visit_slot_reply_markup(slots: list[str]) -> dict[str, Any]:
-    return {
-        "keyboard": [
-            [{"text": f"{index + 1}. {slot}"}] for index, slot in enumerate(slots)
-        ] + [[{"text": "← Back to main menu"}]],
-        "resize_keyboard": True,
-        "one_time_keyboard": True,
-    }
+    return build_selection_reply_markup([
+        f"{index + 1}. {slot}" for index, slot in enumerate(slots)
+    ])
 
 
 def parse_visit_slot_option(raw_text: str, slots: list[str]) -> str | None:
@@ -348,6 +410,16 @@ def parse_visit_slot_option(raw_text: str, slots: list[str]) -> str | None:
         index = int(normalized_text) - 1
         if 0 <= index < len(slots):
             return slots[index]
+
+    # WATI list titles can be shortened. The leading number remains stable
+    # and is sufficient to identify the selected visit slot.
+    for line in reversed([line.strip() for line in normalized_text.splitlines() if line.strip()]):
+        if "." in line:
+            prefix, _ = line.split(".", 1)
+            if prefix.strip().isdigit():
+                index = int(prefix.strip()) - 1
+                if 0 <= index < len(slots):
+                    return slots[index]
 
     for index, slot in enumerate(slots, start=1):
         if normalized_text == f"{index}. {slot}":
@@ -444,8 +516,7 @@ async def build_address_list_message(mobile: str) -> str:
     lines.extend(
         [
             "",
-            "Reply 1 to add a new address.",
-            "Reply 2 to delete an address.",
+            "Choose an action below.",
         ]
     )
     return "\n".join(lines)
@@ -477,7 +548,7 @@ async def build_main_menu_response(
     return send_main_menu(client_type, customer_salutation, is_repeat)
 
 
-async def handle_incoming_message(message: IncomingMessage) -> list[OutgoingMessage]:
+async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMessage]:
     now = time.time()
     existing_session = await get_session(message.user_id)
 
@@ -579,6 +650,30 @@ async def handle_incoming_message(message: IncomingMessage) -> list[OutgoingMess
             handover_result = await request_human_handover(mobile_for_handover)
             return [OutgoingMessage(text=handover_result.message)]
     # --- End early navigation interceptor ---
+
+    # Telegram callbacks and WATI interactive replies are explicit menu taps.
+    # A customer may start another menu action while an earlier flow is still
+    # waiting for input (for example, fabric notes). A menu tap must take
+    # priority over that stale state; otherwise a later address choice such as
+    # "2" is incorrectly consumed by the earlier flow.
+    metadata = message.metadata or {}
+    if metadata.get("is_menu_selection") and message.text:
+        selection_text = (message.text or "").strip()
+        # Numbered choices are used by address, order, date, and slot
+        # sub-flows. WATI marks every interactive response as a menu
+        # selection, but a value such as "1" is not a fresh main-menu tap.
+        # Treating it as one restarts New Order instead of advancing the flow.
+        tapped_intent = None if selection_text.isdigit() else get_intent(
+            existing_client_type or "new_user", message.text
+        )
+        if tapped_intent and tapped_intent not in {"main_menu", "handover"}:
+            clear_all_flows(existing_session)
+            await save_session(existing_session)
+            logger.info(
+                "menu_tap_cleared_stale_flows user_id=%s intent=%s",
+                message.user_id,
+                tapped_intent,
+            )
 
     if existing_session.awaiting_registration_name:
         registration_name = (message.text or "").strip()
@@ -792,23 +887,22 @@ async def handle_incoming_message(message: IncomingMessage) -> list[OutgoingMess
     if existing_session.awaiting_pickup_address:
         normalized_text = (message.text or "").strip().casefold()
 
-        # Handle "add" option to add a new address, then re-show the selection list
+        # The customer explicitly chose to add an address for this pickup.
+        # Go directly to address capture; re-showing the generic address list
+        # creates duplicate replies and makes them choose "1" a second time.
         if normalized_text in {"add", "add address", "new address"}:
             existing_session.awaiting_pickup_address = False
             existing_session.address_needed_for_pickup = True
             clear_address_update_flow(existing_session)
-            existing_session.awaiting_address_action = True
-            mobile_for_address = derive_mobile_from_message(message, existing_mobile)
+            existing_session.awaiting_address_add_line = True
             return [
                 OutgoingMessage(
-                    text=(
-                        "Please add a delivery/pickup address first.\n\n"
-                        "Please reply 1 to add a new address."
+                    text=with_footer(
+                        "Please enter your delivery/pickup address line "
+                        "(house, area, or street)."
                     ),
-                ),
-                OutgoingMessage(
-                    text=with_footer(await build_address_list_message(mobile_for_address) if mobile_for_address else "Please share your mobile number first."),
-                ),
+                    reply_markup=build_nav_keyboard(),
+                )
             ]
 
         choice_text = normalize_mobile(message.text or "")
@@ -919,14 +1013,15 @@ async def handle_incoming_message(message: IncomingMessage) -> list[OutgoingMess
 
         address_lines.extend([
             "",
-            "Reply with the number of the address you'd like to use for this pickup,",
-            "or reply 'add' to add a new address.",
+            "Select an address below, or choose Add address.",
         ])
 
         return [
             OutgoingMessage(
                 text=with_footer("\n".join(address_lines)),
-                reply_markup=build_nav_keyboard(),
+                reply_markup=build_number_selection_reply_markup(
+                    len(address_result.addresses), include_add_address=True
+                ),
             )
         ]
 
@@ -1199,15 +1294,7 @@ async def handle_incoming_message(message: IncomingMessage) -> list[OutgoingMess
                     "2. Enter location manually — I'll enter lat,lng\n"
                     "3. Skip — I'll auto-detect from your address"
                 ),
-                reply_markup={
-                    "keyboard": [
-                        [{"text": "📍 Share Location", "request_location": True}],
-                        [{"text": "2. Enter manually"}],
-                        [{"text": "3. Skip"}],
-                    ],
-                    "resize_keyboard": True,
-                    "one_time_keyboard": True,
-                },
+                reply_markup=build_location_choice_reply_markup(),
             )
         ]
 
@@ -1237,7 +1324,7 @@ async def handle_incoming_message(message: IncomingMessage) -> list[OutgoingMess
             )
         else:
             normalized_text = (message.text or "").strip().casefold()
-            # Handle button taps like "2. Enter manually" or "3. Skip"
+            # Handle the standard location-choice labels and numeric fallback.
             button_text = normalized_text
             if "." in normalized_text:
                 parts = normalized_text.split(".", 1)
@@ -1299,15 +1386,7 @@ async def handle_incoming_message(message: IncomingMessage) -> list[OutgoingMess
                 return [
                     OutgoingMessage(
                         text=with_footer("Invalid choice. Please tap a button above or reply 2 to enter coordinates manually, 3 to skip."),
-                        reply_markup={
-                            "keyboard": [
-                                [{"text": "📍 Share Location", "request_location": True}],
-                                [{"text": "2. Enter manually"}],
-                                [{"text": "3. Skip"}],
-                            ],
-                            "resize_keyboard": True,
-                            "one_time_keyboard": True,
-                        },
+                        reply_markup=build_location_choice_reply_markup(),
                     )
                 ]
 
@@ -1392,14 +1471,15 @@ async def handle_incoming_message(message: IncomingMessage) -> list[OutgoingMess
                     address_lines.append(f"{index}. {', '.join(location_parts)}{main_tag}")
                 address_lines.extend([
                     "",
-                    "Reply with the number of the address you'd like to use for this pickup,",
-                    "or reply 'add' to add another address.",
+                    "Select an address below, or choose Add address.",
                 ])
                 return [
                     OutgoingMessage(text=add_result.message),
                     OutgoingMessage(
                         text=with_footer("\n".join(address_lines)),
-                        reply_markup=build_nav_keyboard(),
+                        reply_markup=build_number_selection_reply_markup(
+                            len(recheck.addresses), include_add_address=True
+                        ),
                     ),
                 ]
 
@@ -1550,14 +1630,15 @@ async def handle_incoming_message(message: IncomingMessage) -> list[OutgoingMess
                     address_lines.append(f"{index}. {', '.join(location_parts)}{main_tag}")
                 address_lines.extend([
                     "",
-                    "Reply with the number of the address you'd like to use for this pickup,",
-                    "or reply 'add' to add another address.",
+                    "Select an address below, or choose Add address.",
                 ])
                 return [
                     OutgoingMessage(text=add_result.message),
                     OutgoingMessage(
                         text=with_footer("\n".join(address_lines)),
-                        reply_markup=build_nav_keyboard(),
+                        reply_markup=build_number_selection_reply_markup(
+                            len(recheck.addresses), include_add_address=True
+                        ),
                     ),
                 ]
 
@@ -1857,14 +1938,15 @@ async def handle_incoming_message(message: IncomingMessage) -> list[OutgoingMess
 
             address_lines.extend([
                 "",
-                "Reply with the number of the address you'd like to use for this pickup,",
-                "or reply 'add' to add a new address.",
+                "Select an address below, or choose Add address.",
             ])
 
             return [
                 OutgoingMessage(
                     text=with_footer("\n".join(address_lines)),
-                    reply_markup=build_nav_keyboard(),
+                    reply_markup=build_number_selection_reply_markup(
+                        len(address_result.addresses), include_add_address=True
+                    ),
                 )
             ]
 
@@ -2026,13 +2108,13 @@ async def handle_incoming_message(message: IncomingMessage) -> list[OutgoingMess
 
             order_lines.extend([
                 "",
-                "Reply with the number of the order you'd like to schedule an alteration pickup for.",
+                "Select the order for alteration pickup below.",
             ])
 
             return [
                 OutgoingMessage(
                     text=with_footer("\n".join(order_lines)),
-                    reply_markup=build_nav_keyboard(),
+                    reply_markup=build_number_selection_reply_markup(len(delivered_result.orders)),
                 )
             ]
 
@@ -2107,12 +2189,12 @@ async def handle_incoming_message(message: IncomingMessage) -> list[OutgoingMess
                     order_lines.append(pickup_line)
                 order_lines.append("")
 
-            order_lines.append("Reply with the number of the order you'd like to modify.")
+            order_lines.append("Select the order you want to modify below.")
 
             return [
                 OutgoingMessage(
                     text=with_footer("\n".join(order_lines)),
-                    reply_markup=build_nav_keyboard(),
+                    reply_markup=build_number_selection_reply_markup(len(active_orders_result.orders)),
                 )
             ]
 
@@ -2155,12 +2237,12 @@ async def handle_incoming_message(message: IncomingMessage) -> list[OutgoingMess
                     order_lines.append(pickup_line)
                 order_lines.append("")
 
-            order_lines.append("Reply with the number of the order you'd like to cancel.")
+            order_lines.append("Select the order you want to cancel below.")
 
             return [
                 OutgoingMessage(
                     text=with_footer("\n".join(order_lines)),
-                    reply_markup=build_nav_keyboard(),
+                    reply_markup=build_number_selection_reply_markup(len(orders_result.orders)),
                 )
             ]
 
@@ -2183,10 +2265,10 @@ async def handle_incoming_message(message: IncomingMessage) -> list[OutgoingMess
             )
             existing_session.awaiting_address_action = True
             return [
-                OutgoingMessage(
-                    text=await build_address_list_message(mobile_for_address),
-                    reply_markup=build_nav_keyboard(),
-                )
+            OutgoingMessage(
+                text=await build_address_list_message(mobile_for_address),
+                reply_markup=build_selection_reply_markup(["Add address", "Delete address"]),
+            )
             ]
 
         intent_response = await build_intent_response(selected_intent, client_type)
@@ -2196,3 +2278,20 @@ async def handle_incoming_message(message: IncomingMessage) -> list[OutgoingMess
         return [OutgoingMessage(text=f"Selected option: {selected_intent}")]
 
     return []
+
+
+async def handle_incoming_message(message: IncomingMessage) -> list[OutgoingMessage]:
+    """Handle one inbound message and persist every mutated session state.
+
+    All channels call this shared function. The `finally` block protects flow
+    state across the many early returns above, including address, pickup,
+    order, registration, and navigation paths.
+    """
+    token = begin_session_scope()
+    try:
+        return await _handle_incoming_message(message)
+    finally:
+        try:
+            await save_active_sessions()
+        finally:
+            end_session_scope(token)

@@ -29,7 +29,7 @@ MAX_BUTTONS = 3
 WATI_NAVIGATION_MARKUP: dict[str, Any] = {
     "inline_keyboard": [[
         {"text": "Main menu", "callback_data": "menu_main_menu"},
-        {"text": "Talk to an agent", "callback_data": "menu_handover"},
+        {"text": "Human support", "callback_data": "menu_handover"},
     ]]
 }
 
@@ -82,21 +82,59 @@ def _extract_interactive_response(payload: dict[str, Any]) -> str | None:
       }
     }
     """
+    # WATI's current Message Received webhook places these fields at the top
+    # level: `listReply`, `interactiveButtonReply`, and `buttonReply`. Older
+    # integrations (and some providers) nest them inside `interactive`.
     interactive = payload.get("interactive")
-    if not isinstance(interactive, dict):
-        return None
+    nested = interactive if isinstance(interactive, dict) else {}
+    data = payload.get("data")
+    nested_data = data if isinstance(data, dict) else {}
 
-    # Check for list reply
-    list_reply = interactive.get("list_reply") or interactive.get("listReply")
-    if isinstance(list_reply, dict):
-        return list_reply.get("id") or list_reply.get("title")
+    candidates = (
+        payload.get("listReply"),
+        payload.get("interactiveButtonReply"),
+        payload.get("buttonReply"),
+        nested.get("list_reply") or nested.get("listReply"),
+        nested.get("button_reply") or nested.get("buttonReply"),
+        nested_data.get("listReply") or nested_data.get("list_reply"),
+        nested_data.get("interactiveButtonReply") or nested_data.get("buttonReply"),
+        # Some WATI tenants return the selected reply object directly as
+        # `data`, rather than nesting it under a reply-type key.
+        nested_data,
+    )
+    for reply in candidates:
+        if not isinstance(reply, dict):
+            continue
+        # Preserve our original callback ID when WATI returns it. Other `id`
+        # fields can be WATI-internal row/message IDs, so never route on them
+        # ahead of the visible label.
+        for key in ("id", "buttonId", "rowId", "selectedRowId", "selectedButtonId"):
+            value = reply.get(key)
+            if isinstance(value, str) and value.strip() and value.strip().startswith("menu_"):
+                return value.strip()
 
-    # Check for button reply
-    button_reply = interactive.get("button_reply") or interactive.get("buttonReply")
-    if isinstance(button_reply, dict):
-        return button_reply.get("id") or button_reply.get("title")
+        # WATI commonly returns the selected title/text. Those labels map to
+        # the same intents as Telegram's callback data.
+        for key in ("title", "text", "buttonText", "rowTitle"):
+            value = reply.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        # Last resort for a provider-specific ID when no label is available.
+        for key in ("id", "buttonId", "rowId", "selectedRowId", "selectedButtonId"):
+            value = reply.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
 
     return None
+
+
+def _normalize_wati_list_selection(text: str) -> str:
+    """Remove WATI's display-only list-row description from a selection."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) == 2 and lines[1].casefold() == "tap to continue":
+        return lines[0]
+    return text
 
 
 def _extract_contact_phone(payload: dict[str, Any]) -> str | None:
@@ -143,8 +181,16 @@ def parse_wati_update(update: dict[str, Any]) -> IncomingMessage | None:
 
     # First try to extract interactive response (button/list tap)
     interactive_text = _extract_interactive_response(source_data if isinstance(source_data, dict) else update)
+    if interactive_text is None and source_data is not update:
+        # Preserve top-level WATI reply fields when `data` also exists.
+        interactive_text = _extract_interactive_response(update)
     text = interactive_text or _extract_text(source_data if isinstance(source_data, dict) else update)
+    text = _normalize_wati_list_selection(text)
     contact_phone = _extract_contact_phone(source_data if isinstance(source_data, dict) else update)
+    interactive_message_types = {"interactive", "button", "list"}
+    is_menu_selection = bool(interactive_text) or str(
+        (source_data if isinstance(source_data, dict) else update).get("type", "")
+    ).casefold() in interactive_message_types
 
     return IncomingMessage(
         user_id=user_id,
@@ -157,6 +203,7 @@ def parse_wati_update(update: dict[str, Any]) -> IncomingMessage | None:
             "platform": "wati",
             "raw_update": update,
             "message_id": source_data.get("messageId") or source_data.get("id") or update.get("messageId") or update.get("id"),
+            "is_menu_selection": is_menu_selection,
         },
     )
 
@@ -165,19 +212,31 @@ def parse_wati_update(update: dict[str, Any]) -> IncomingMessage | None:
 #  WATI API calls
 # ──────────────────────────────────────────────
 
-async def call_wati_api(endpoint: str, payload: dict[str, Any]) -> None:
+async def call_wati_api(
+    endpoint: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    params: dict[str, str] | None = None,
+) -> None:
     """Call a WATI API endpoint with the given payload."""
     if not settings.wati_base_url or not settings.wati_api_key:
         raise HTTPException(status_code=503, detail="WATI is not configured")
 
     url = f"{settings.wati_base_url.rstrip('/')}/api/v1/{endpoint.lstrip('/')}"
+    # WATI's dashboard displays tokens with a "Bearer " label. Accept either
+    # the raw token (the preferred .env format) or that copied form, but never
+    # send the invalid "Bearer Bearer <token>" authorization header.
+    api_key = settings.wati_api_key.strip()
+    if api_key.lower().startswith("bearer "):
+        api_key = api_key[7:].strip()
+
     headers = {
-        "Authorization": f"Bearer {settings.wati_api_key}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
     async with httpx.AsyncClient(timeout=15) as client:
-        response = await client.post(url, json=payload, headers=headers)
+        response = await client.post(url, json=payload, params=params, headers=headers)
         response.raise_for_status()
 
 
@@ -234,7 +293,9 @@ def _format_wati_text(value: str) -> str:
 
 def _wati_markup(message: OutgoingMessage) -> dict[str, Any]:
     """Provide consistent navigation on free-text sub-flow messages."""
-    return message.reply_markup or WATI_NAVIGATION_MARKUP
+    if message.reply_markup is not None:
+        return message.reply_markup
+    return WATI_NAVIGATION_MARKUP if message.include_wati_navigation else {}
 
 
 def _build_interactive_list_payload(
@@ -256,7 +317,6 @@ def _build_interactive_list_payload(
         rows.append({
             "id": callback_id,
             "title": label,
-            "description": "Tap to continue",
         })
 
     # Split into sections of MAX_LIST_ROWS
@@ -269,25 +329,12 @@ def _build_interactive_list_payload(
             "rows": chunk,
         })
 
+    # WATI's list API uses its own schema. The recipient is sent as the
+    # `whatsappNumber` query parameter by `send_wati_message`, not in JSON.
     return {
-        "whatsappNumber": str(user_id),
-        "interactive": {
-            "type": "list",
-            "header": {
-                "type": "text",
-                "text": "tailorsin.com",
-            },
-            "body": {
-                "text": _format_wati_text(text)[:1024],  # WhatsApp body max 1024 chars
-            },
-            "footer": {
-                "text": "tailorsin.com",
-            },
-            "action": {
-                "button": "Explore options",
-                "sections": sections,
-            },
-        },
+        "body": _format_wati_text(text)[:1024],
+        "buttonText": "Explore options",
+        "sections": sections,
     }
 
 
@@ -308,28 +355,15 @@ def _build_interactive_buttons_payload(
     reply_buttons = []
     for button in buttons:
         label = _wati_menu_label(button["text"])
-        callback_id = button.get("callback_data", "") or label
         # WhatsApp button title max 20 chars
         title = label[:20]
-        reply_buttons.append({
-            "type": "reply",
-            "reply": {
-                "id": callback_id,
-                "title": title,
-            },
-        })
+        # The WATI buttons API sends the button text back in the webhook.
+        # Our router understands the display label as well as callback IDs.
+        reply_buttons.append({"text": title})
 
     return {
-        "whatsappNumber": str(user_id),
-        "interactive": {
-            "type": "button",
-            "body": {
-                "text": _format_wati_text(text)[:1024],
-            },
-            "action": {
-                "buttons": reply_buttons,
-            },
-        },
+        "body": _format_wati_text(text)[:1024],
+        "buttons": reply_buttons,
     }
 
 
@@ -364,29 +398,23 @@ def build_wati_payload(user_id: int, message: OutgoingMessage) -> dict[str, Any]
 
     Priority:
     1. If inline_keyboard is present → use interactive list/buttons (Telegram-like)
-    2. If keyboard with request_location → use text + location button
+    2. If keyboard with request_location → explain the WhatsApp alternative
     3. Otherwise → plain text message
     """
     text = _format_wati_text(message.text)
     effective_markup = _wati_markup(message)
 
-    # Check for location request buttons
+    # WATI has no native location-request control. Keep the other choices
+    # (manual entry, skip, navigation) interactive and add a short instruction
+    # rather than discarding the whole keyboard.
+    location_requested = False
     if message.reply_markup and message.reply_markup.get("keyboard"):
         for row in message.reply_markup.get("keyboard", []):
             for button in row:
                 if button.get("request_location"):
-                    # WATI supports location request buttons via sendSessionMessage
-                    payload = {
-                        "whatsappNumber": str(user_id),
-                        "messageText": text,
-                    }
-                    payload["buttons"] = [
-                        {
-                            "text": button.get("text", "📍 Share Location"),
-                            "type": "location",
-                        }
-                    ]
-                    return payload
+                    location_requested = True
+    if location_requested:
+        text = f"{text}\n\nYou can also attach your location using WhatsApp's location option."
 
     # Check for inline_keyboard (Telegram-style) → use interactive list/buttons
     if effective_markup.get("inline_keyboard") or effective_markup.get("keyboard"):
@@ -403,22 +431,31 @@ def build_wati_payload(user_id: int, message: OutgoingMessage) -> dict[str, Any]
     if buttons_text:
         text = f"{text}\n\n{buttons_text}"
 
-    return {
-        "whatsappNumber": str(user_id),
-        "messageText": text,
-    }
+    return {"messageText": text}
 
 
 async def send_wati_message(user_id: int, message: OutgoingMessage) -> None:
     payload = build_wati_payload(user_id, message)
 
-    # Determine which API endpoint to use
-    if "interactive" in payload:
-        # Use the interactive message endpoint
-        await call_wati_api("sendInteractiveMessage", payload)
+    # WATI has distinct endpoints and payload shapes for buttons and lists.
+    # `sendInteractiveMessage` is not a WATI endpoint.
+    if "buttons" in payload:
+        await call_wati_api(
+            "sendInteractiveButtonsMessage",
+            payload,
+            params={"whatsappNumber": str(user_id)},
+        )
+    elif "sections" in payload:
+        await call_wati_api(
+            "sendInteractiveListMessage",
+            payload,
+            params={"whatsappNumber": str(user_id)},
+        )
     else:
-        # Use the standard session message endpoint
-        await call_wati_api("sendSessionMessage", payload)
+        await call_wati_api(
+            f"sendSessionMessage/{user_id}",
+            params={"messageText": str(payload["messageText"])},
+        )
 
 
 async def process_wati_update(update: dict[str, Any]) -> dict[str, bool]:

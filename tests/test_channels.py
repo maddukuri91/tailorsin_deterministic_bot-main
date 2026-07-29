@@ -32,6 +32,7 @@ def test_telegram_parses_text_and_callback_updates():
 
     assert message and message.user_id == 10 and message.text == "hello"
     assert callback and callback.user_id == 10 and callback.text == "3"
+    assert callback.metadata and callback.metadata["is_menu_selection"] is True
 
 
 def test_twilio_parses_whatsapp_and_rejects_invalid_sender():
@@ -100,6 +101,9 @@ def test_twilio_whatsapp_plain_subflow_has_consistent_navigation():
     assert types["twilio/quick-reply"]["body"] == "Enter *your address*."
     assert [action["id"] for action in types["twilio/quick-reply"]["actions"]] == [
         "menu_main_menu", "menu_handover"
+    ]
+    assert [action["title"] for action in types["twilio/quick-reply"]["actions"]] == [
+        "Main menu", "Human support"
     ]
 
 

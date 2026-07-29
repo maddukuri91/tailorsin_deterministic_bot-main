@@ -14,19 +14,44 @@ def test_wati_large_menu_is_a_clean_interactive_list():
     )
 
     payload = build_wati_payload(919876543210, message)
-    interactive = payload["interactive"]
-    assert interactive["type"] == "list"
-    assert interactive["body"]["text"] == "Choose *a service*."
-    assert interactive["action"]["button"] == "Explore options"
-    assert interactive["action"]["sections"][0]["rows"][0]["title"] == "Track my current order"
+    assert payload["body"] == "Choose *a service*."
+    assert "header" not in payload
+    assert "footer" not in payload
+    assert payload["buttonText"] == "Explore options"
+    assert payload["sections"][0]["rows"][0]["title"] == "Track my current order"
+    assert "description" not in payload["sections"][0]["rows"][0]
 
 
 def test_wati_plain_subflow_has_navigation_buttons():
     payload = build_wati_payload(919876543210, OutgoingMessage("Enter your address."))
-    buttons = payload["interactive"]["action"]["buttons"]
+    buttons = payload["buttons"]
 
-    assert payload["interactive"]["type"] == "button"
-    assert [button["reply"]["id"] for button in buttons] == ["menu_main_menu", "menu_handover"]
+    assert "header" not in payload
+    assert "footer" not in payload
+    assert [button["text"] for button in buttons] == ["Main menu", "Human support"]
+
+
+def test_wati_location_step_keeps_manual_and_navigation_choices():
+    payload = build_wati_payload(
+        919876543210,
+        OutgoingMessage(
+            "Choose location.",
+            {
+                "keyboard": [
+                    [{"text": "Share location", "request_location": True}],
+                    [{"text": "Enter location manually"}],
+                    [{"text": "Skip location"}],
+                    [{"text": "Main menu"}],
+                    [{"text": "Human support"}],
+                ]
+            },
+        ),
+    )
+
+    titles = [row["title"] for section in payload["sections"] for row in section["rows"]]
+    assert "Enter location manually" in titles
+    assert "Skip location" in titles
+    assert titles[-2:] == ["Main menu", "Human support"]
 
 
 def test_wati_parses_camel_case_interactive_reply():
@@ -37,3 +62,63 @@ def test_wati_parses_camel_case_interactive_reply():
 
     assert message is not None
     assert message.text == "menu_address_update"
+
+
+def test_wati_parses_documented_top_level_list_reply():
+    message = parse_wati_update({
+        "id": "wati-event-1",
+        "waId": "919876543210",
+        "type": "interactive",
+        "listReply": {"id": "menu_order_status", "title": "Track my order"},
+    })
+
+    assert message is not None
+    assert message.text == "menu_order_status"
+    assert message.metadata and message.metadata["is_menu_selection"] is True
+
+
+def test_wati_parses_documented_top_level_button_reply_label():
+    message = parse_wati_update({
+        "id": "wati-event-2",
+        "waId": "919876543210",
+        "type": "interactive",
+        "interactiveButtonReply": {"title": "Main menu"},
+    })
+
+    assert message is not None
+    assert message.text == "Main menu"
+
+
+def test_wati_strips_list_row_description_when_wati_returns_text_only():
+    message = parse_wati_update({
+        "id": "wati-event-3",
+        "waId": "919876543210",
+        "type": "interactive",
+        "text": "View price catalog\nTap to continue",
+    })
+
+    assert message is not None
+    assert message.text == "View price catalog"
+
+
+def test_wati_parses_reply_object_directly_from_data():
+    message = parse_wati_update({
+        "id": "wati-event-4",
+        "waId": "919876543210",
+        "type": "interactive",
+        "data": {"title": "View price catalog", "description": "Tap to continue"},
+    })
+
+    assert message is not None
+    assert message.text == "View price catalog"
+
+
+def test_wati_uses_visible_label_over_non_menu_internal_row_id():
+    message = parse_wati_update({
+        "id": "wati-event-5",
+        "waId": "919876543210",
+        "listReply": {"id": "row-481", "title": "View price catalog"},
+    })
+
+    assert message is not None
+    assert message.text == "View price catalog"
