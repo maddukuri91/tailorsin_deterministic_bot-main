@@ -230,11 +230,6 @@ def is_telegram_message(message: IncomingMessage) -> bool:
     return str(metadata.get("platform", "")).strip().lower() == "telegram"
 
 
-def is_twilio_message(message: IncomingMessage) -> bool:
-    metadata = message.metadata or {}
-    return str(metadata.get("platform", "")).strip().lower() == "twilio"
-
-
 def is_onboarding_trigger(message: IncomingMessage) -> bool:
     if message.is_start_command:
         return True
@@ -1815,10 +1810,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         await save_client_profile(message.user_id, mobile, client_type, customer_salutation)
         return [await build_main_menu_response(message.user_id, client_type, customer_salutation)]
 
-    # Twilio includes the sender's phone number on every inbound WhatsApp
-    # webhook. It identifies the customer, but it is not a fresh contact-share
-    # action; treating it as one would reopen the main menu on every button tap.
-    if message.contact_phone and not is_twilio_message(message):
+    if message.contact_phone:
         if message.contact_user_id not in (None, message.source_user_id):
             return [OutgoingMessage(text="Please share your own mobile number using the button.")]
 

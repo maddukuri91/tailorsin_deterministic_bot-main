@@ -60,18 +60,6 @@ class Settings:
     wati_webhook_secret = os.getenv("WATI_WEBHOOK_SECRET", "")
     wati_enabled = _as_bool("WATI_ENABLED", bool(wati_base_url and wati_api_key))
 
-    # Twilio SMS / WhatsApp
-    twilio_account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
-    twilio_auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
-    twilio_phone_number = os.getenv("TWILIO_PHONE_NUMBER", "")
-    twilio_webhook_url = os.getenv("TWILIO_WEBHOOK_URL", "")
-    twilio_whatsapp_enabled = _as_bool("TWILIO_WHATSAPP_ENABLED", False)
-    twilio_validate_signature = _as_bool("TWILIO_VALIDATE_SIGNATURE", True)
-    twilio_enabled = _as_bool(
-        "TWILIO_ENABLED",
-        bool(twilio_account_sid and twilio_auth_token and twilio_phone_number),
-    )
-
     def production_errors(self) -> list[str]:
         """Return actionable configuration errors without exposing secrets."""
         if not self.production_mode:
@@ -94,13 +82,6 @@ class Settings:
                 errors.append("WATI_WEBHOOK_URL must be an HTTPS URL in production")
             if self.require_webhook_secrets and not self.wati_webhook_secret:
                 errors.append("WATI_WEBHOOK_SECRET is required in production")
-        if self.twilio_enabled:
-            if not all((self.twilio_account_sid, self.twilio_auth_token, self.twilio_phone_number)):
-                errors.append("Twilio account SID, auth token, and sender are required when Twilio is enabled")
-            if not self.twilio_webhook_url.startswith("https://"):
-                errors.append("TWILIO_WEBHOOK_URL must be an HTTPS URL in production")
-            if not self.twilio_validate_signature:
-                errors.append("TWILIO_VALIDATE_SIGNATURE must be enabled in production")
         return errors
 
 

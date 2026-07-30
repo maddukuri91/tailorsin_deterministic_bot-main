@@ -2,20 +2,11 @@
 
 ## 1. Choose the active channel combination
 
-Set exactly one WhatsApp provider alongside Telegram:
+Run Telegram and WATI together:
 
 ```env
-# Telegram + WATI
 TELEGRAM_ENABLED=true
 WATI_ENABLED=true
-TWILIO_ENABLED=false
-```
-
-```env
-# Telegram + Twilio
-TELEGRAM_ENABLED=true
-WATI_ENABLED=false
-TWILIO_ENABLED=true
 ```
 
 ## 2. Required production settings
@@ -50,11 +41,10 @@ production.
 | --- | --- |
 | Telegram | `https://your-domain/telegram/webhook` |
 | WATI | `https://your-domain/wati/webhook` |
-| Twilio | `https://your-domain/twilio/webhook` |
 
 Telegram must be registered with `secret_token` equal to
-`TELEGRAM_WEBHOOK_SECRET`. Configure matching WATI/Twilio validation in their
-provider consoles.
+`TELEGRAM_WEBHOOK_SECRET`. Configure the matching WATI webhook secret in the
+WATI console.
 
 ## 5. Verify before launch
 

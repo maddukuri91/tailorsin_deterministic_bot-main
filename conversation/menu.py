@@ -142,23 +142,21 @@ def format_menu_message_with_greeting(
 
         lines.extend([
             "👋 *Welcome back!*",
-            f"Hello {salutation}, great to see you again at **tailorsin.com** ✨",
+            f"Hello {salutation}. How can we help today?",
             "",
-            "I'm your AI assistant. I can help you track your orders, schedule pickups, and more.",
+            "I can help with orders, pickups, visits, pricing, and support.",
             "",
         ])
     else:
         lines.extend([
-            "👋 *Welcome to tailorsin.com!*",
+            "👋 *Welcome to Tailorsin!*",
             "",
-            "We bring professional tailoring to your doorstep. "
-            "Get your clothes tailored with ease, right from your home.",
+            "Professional tailoring with convenient pickup and delivery.",
             "",
         ])
 
     lines.extend([
-        "—",
-        "Select an option below ⬇️",
+        "Please choose an option below.",
     ])
 
     return "\n".join(lines)

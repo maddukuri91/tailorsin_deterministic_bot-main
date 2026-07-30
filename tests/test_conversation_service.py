@@ -120,7 +120,7 @@ def test_handover_intent_works():
     assert any("Agent notified" in o.text for o in out)
 
 
-def test_menu_button_payload_routes_to_address_update(monkeypatch):
+def test_wati_menu_button_routes_to_address_update(monkeypatch):
     """WhatsApp's menu_address_update payload must not reopen the main menu."""
     async def fake_addresses(mobile):
         return _AddrResult()
@@ -135,8 +135,8 @@ def test_menu_button_payload_routes_to_address_update(monkeypatch):
     monkeypatch.setattr(svc, "fetch_client_addresses", fake_addresses)
     monkeypatch.setattr(svc, "build_address_list_message", fake_address_message)
     asyncio.get_event_loop().run_until_complete(reset_session(CHAT_ID))
-    run(make_message("hi", is_start_command=True, contact_phone="9988776655", metadata={"platform": "twilio"}))
-    out = run(make_message("address_update", contact_phone="9988776655", metadata={"platform": "twilio"}))
+    run(make_message("hi", is_start_command=True, contact_phone="9988776655", metadata={"platform": "wati"}))
+    out = run(make_message("address_update", metadata={"platform": "wati", "is_menu_selection": True}))
 
     assert "Saved addresses" in out[0].text
 

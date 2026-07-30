@@ -113,7 +113,7 @@ def parse_callback_query_update(update: dict[str, Any]) -> IncomingMessage | Non
 
 async def call_telegram_api(method: str, payload: dict[str, Any]) -> None:
     if not settings.telegram_bot_token:
-        # Do not fail application startup when only the Twilio channel is enabled.
+        # Do not fail application startup when Telegram is intentionally disabled.
         raise HTTPException(status_code=503, detail="Telegram is not configured")
 
     async with httpx.AsyncClient(timeout=15) as client:

@@ -16,8 +16,4 @@ async def build_visit_history_response(mobile: str) -> str:
             f"{index}. {appointment.bookdate_display} | {appointment.booktime} | {appointment.store_name} | {appointment.status_label}"
         )
 
-    lines.extend([
-        "",
-        "Reply with 0 for main menu or 9 to chat with a human agent.",
-    ])
     return "\n".join(lines)

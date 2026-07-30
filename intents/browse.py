@@ -1,9 +1,7 @@
 from crm.items import fetch_browse_catalog
 
 
-BROWSE_INTRO = (
-    "We stitch Women's, Men's, and Kids wear with custom fitting, design preferences, and finishing support. Here are the categories currently available:\n\n"
-)
+BROWSE_INTRO = "We tailor garments for women, men, and children. Available categories:"
 
 
 async def build_browse_response() -> str:
@@ -26,5 +24,4 @@ async def build_browse_response() -> str:
         sections.extend(f"- {item}" for item in catalog.kids_wear)
         sections.append("")
 
-    sections.append("Reply with 0 for the main menu or 9 to chat with a human agent.")
     return "\n".join(sections)
