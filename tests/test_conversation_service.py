@@ -183,7 +183,7 @@ def test_wati_numbered_address_selection_advances_to_pickup_date():
     out = run(make_message("1", metadata={"platform": "wati", "is_menu_selection": True}))
 
     assert len(out) == 1
-    assert "choose pickup date" in out[0].text.lower()
+    assert "select a pickup date" in out[0].text.lower()
 
     session = asyncio.get_event_loop().run_until_complete(get_session(CHAT_ID))
     assert session.awaiting_pickup_address is False

@@ -704,7 +704,15 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         existing_session.awaiting_registration_name = False
         existing_session.awaiting_registration_email = True
 
-        return [OutgoingMessage(text=with_footer("Please enter your email address for registration (optional).\nReply with 'skip' to skip email."), reply_markup=build_nav_keyboard())]
+        return [
+            OutgoingMessage(
+                text=with_footer(
+                    "Enter your email address (optional).\n"
+                    "Reply *Skip* if you would prefer not to add an email address."
+                ),
+                reply_markup=build_nav_keyboard(),
+            )
+        ]
 
     if existing_session.awaiting_registration_email:
         registration_name = existing_session.pending_registration_name
@@ -767,7 +775,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
             return [
                 OutgoingMessage(
                     text=with_footer(
-                        "Please choose a valid pickup date option:\n"
+                        "Select a pickup date:\n"
                         "1. Today's date\n"
                         "2. Tomorrow's date\n"
                         "3. Day after tomorrow"
@@ -781,7 +789,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         existing_session.awaiting_pickup_time = True
         return [
             OutgoingMessage(
-                text=with_footer("Choose pickup time slot:\n1. Morning (9 AM - 2 PM)\n2. Afternoon (2 PM - 9 PM)"),
+                text=with_footer("Select a pickup time slot:\n1. Morning (9 AM – 2 PM)\n2. Afternoon (2 PM – 9 PM)"),
                 reply_markup=build_pickup_time_reply_markup(),
             )
         ]
@@ -794,7 +802,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
                 return [await build_main_menu_response(message.user_id, existing_client_type or "client", existing_customer_salutation)]
             return [
                 OutgoingMessage(
-                    text=with_footer("Please choose a valid pickup slot: 1 for Morning or 2 for Afternoon."),
+                    text=with_footer("Select a pickup time slot: Morning or Afternoon."),
                     reply_markup=build_pickup_time_reply_markup(),
                 )
             ]
@@ -807,7 +815,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
             clear_pickup_flow(existing_session)
             return [
                 OutgoingMessage(
-                    text=with_footer("Unable to schedule pickup because mobile or pickup date is missing. Please choose option 1 again."),
+                    text=with_footer("We could not schedule your pickup because some details are missing. Please start a new order from the main menu."),
                     reply_markup=build_menu_reply_markup(existing_client_type or "client"),
                 )
             ]
@@ -819,9 +827,9 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
             return [
                 OutgoingMessage(
                     text=with_footer(
-                        "Please share alteration/request notes (optional).\n"
-                        "Example: Shirt sleeves need to be shortened.\n"
-                        "Reply with 'skip' to continue without notes."
+                        "Add a note about the alteration (optional).\n"
+                        "Example: Shorten the shirt sleeves.\n"
+                        "Reply *Skip* to continue without a note."
                     ),
                     reply_markup=build_nav_keyboard(),
                 )
@@ -943,9 +951,9 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         existing_session.awaiting_pickup_address = False
         existing_session.awaiting_pickup_date = True
 
-        pickup_intro = "Please choose pickup date:"
+        pickup_intro = "Select a pickup date:"
         if existing_session.pickup_mode == "alteration":
-            pickup_intro = "Please choose alteration/another pickup date:"
+            pickup_intro = "Select a date for the alteration pickup:"
 
         return [
             OutgoingMessage(
@@ -1058,7 +1066,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         if not mobile_for_pickup or not pickup_date or pickup_time is None:
             return [
                 OutgoingMessage(
-                    text=with_footer("Unable to schedule alteration pickup due to missing details. Please choose option 2 again."),
+                    text=with_footer("We could not schedule the alteration pickup because some details are missing. Please start again from the main menu."),
                     reply_markup=build_menu_reply_markup(existing_client_type or "active_client"),
                 )
             ]
@@ -1104,7 +1112,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
             return [
                 OutgoingMessage(
                     text=with_footer(
-                        "Please choose a valid visit date option:\n"
+                        "Select a visit date:\n"
                         "1. Today's date\n"
                         "2. Tomorrow's date\n"
                         "3. Day after tomorrow"
@@ -1128,7 +1136,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         existing_session.awaiting_visit_time = True
 
         slot_lines = [
-            "Choose available visit slot:",
+            "Select an available visit time:",
             *[f"{index + 1}. {slot}" for index, slot in enumerate(availability_result.slots)],
         ]
         return [
@@ -1147,7 +1155,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         if selected_slot is None:
             return [
                 OutgoingMessage(
-                    text=with_footer("Please choose a valid slot from the listed options."),
+                    text=with_footer("Please select one of the available visit times."),
                     reply_markup=build_visit_slot_reply_markup(existing_session.pending_visit_slots),
                 )
             ]
@@ -1162,7 +1170,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         if not visit_mobile or not visit_date:
             return [
                 OutgoingMessage(
-                    text=with_footer("Unable to schedule store visit because mobile or date is missing. Please choose option 3 again."),
+                    text=with_footer("We could not schedule your store visit because some details are missing. Please start again from the main menu."),
                     reply_markup=build_menu_reply_markup(existing_client_type or "client"),
                 )
             ]
@@ -1266,7 +1274,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         if not mobile_for_address:
             return [
                 OutgoingMessage(
-                    text=with_footer("Unable to delete address due to missing mobile number. Please choose option 8 again."),
+                    text=with_footer("We could not delete this address because we could not verify your mobile number. Please try again from Update Address."),
                     reply_markup=build_menu_reply_markup(existing_client_type or "client"),
                 )
             ]
@@ -1287,7 +1295,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         existing_session.pending_address_line = address_line
         existing_session.awaiting_address_add_line = False
         existing_session.awaiting_address_add_city = True
-        return [OutgoingMessage(text=with_footer("Please enter city name."), reply_markup=build_nav_keyboard())]
+        return [OutgoingMessage(text=with_footer("Please enter your city."), reply_markup=build_nav_keyboard())]
 
     if existing_session.awaiting_address_add_city:
         city = (message.text or "").strip()
@@ -1297,12 +1305,12 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         existing_session.pending_address_city = city
         existing_session.awaiting_address_add_city = False
         existing_session.awaiting_address_add_pincode = True
-        return [OutgoingMessage(text=with_footer("Please enter 6-digit pincode."), reply_markup=build_nav_keyboard())]
+        return [OutgoingMessage(text=with_footer("Please enter your 6-digit PIN code."), reply_markup=build_nav_keyboard())]
 
     if existing_session.awaiting_address_add_pincode:
         pincode = normalize_mobile(message.text or "")
         if len(pincode) != 6:
-            return [OutgoingMessage(text=with_footer("Please enter a valid 6-digit pincode."), reply_markup=build_nav_keyboard())]
+            return [OutgoingMessage(text=with_footer("Please enter a valid 6-digit PIN code."), reply_markup=build_nav_keyboard())]
 
         mobile_for_address = derive_mobile_from_message(message, existing_mobile)
         address_line = existing_session.pending_address_line
@@ -1312,7 +1320,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
             clear_address_update_flow(existing_session)
             return [
                 OutgoingMessage(
-                    text=with_footer("Unable to add address due to missing details. Please choose option 8 again."),
+                    text=with_footer("We could not save your address because some details are missing. Please try again from Update Address."),
                     reply_markup=build_menu_reply_markup(existing_client_type or "client"),
                 )
             ]
@@ -1348,7 +1356,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
             if not mobile_for_address or not address_line or not city:
                 return [
                     OutgoingMessage(
-                        text=with_footer("Unable to add address due to missing details. Please choose option 8 again."),
+                        text=with_footer("We could not save your address because some details are missing. Please try again from Update Address."),
                         reply_markup=build_menu_reply_markup(existing_client_type or "client"),
                     )
                 ]
@@ -1410,7 +1418,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
                 if not mobile_for_address or not address_line or not city:
                     return [
                         OutgoingMessage(
-                            text=with_footer("Unable to add address due to missing details. Please choose option 8 again."),
+                            text=with_footer("We could not save your address because some details are missing. Please try again from Update Address."),
                             reply_markup=build_menu_reply_markup(existing_client_type or "client"),
                         )
                     ]
@@ -1496,9 +1504,9 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
                 existing_session.address_needed_for_pickup = False
                 existing_session.pending_pickup_address_id = recheck.addresses[0].address_id
                 existing_session.awaiting_pickup_date = True
-                pickup_intro = "Address added. Please choose pickup date:"
+                pickup_intro = "Address added. Select a pickup date:"
                 if existing_session.pickup_mode == "alteration":
-                    pickup_intro = "Address added. Please choose alteration/another pickup date:"
+                    pickup_intro = "Address added. Select a date for the alteration pickup:"
                 return [
                     OutgoingMessage(text=add_result.message),
                     OutgoingMessage(
@@ -1597,7 +1605,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         if not mobile_for_address or not address_line or not city:
             return [
                 OutgoingMessage(
-                    text=with_footer("Unable to add address due to missing details. Please choose option 8 again."),
+                    text=with_footer("We could not save your address because some details are missing. Please try again from Update Address."),
                     reply_markup=build_menu_reply_markup(existing_client_type or "client"),
                 )
             ]
@@ -1655,9 +1663,9 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
                 existing_session.address_needed_for_pickup = False
                 existing_session.pending_pickup_address_id = recheck.addresses[0].address_id
                 existing_session.awaiting_pickup_date = True
-                pickup_intro = "Address added. Please choose pickup date:"
+                pickup_intro = "Address added. Select a pickup date:"
                 if existing_session.pickup_mode == "alteration":
-                    pickup_intro = "Address added. Please choose alteration/another pickup date:"
+                    pickup_intro = "Address added. Select a date for the alteration pickup:"
                 return [
                     OutgoingMessage(text=add_result.message),
                     OutgoingMessage(
@@ -1747,7 +1755,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
 
         return [
             OutgoingMessage(
-                text=with_footer(f"Selected Order #{existing_session.pending_change_order_id}.\n\nPlease describe your requested changes in detail."),
+                text=with_footer(f"Order #{existing_session.pending_change_order_id} selected.\n\nPlease describe the changes you would like to make."),
                 reply_markup=build_nav_keyboard(),
             )
         ]
@@ -1755,7 +1763,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
     if existing_session.awaiting_order_change_details:
         details = (message.text or "").strip()
         if len(details) < 5:
-            return [OutgoingMessage(text=with_footer("Please enter a valid request description."), reply_markup=build_nav_keyboard())]
+            return [OutgoingMessage(text=with_footer("Please provide a little more detail about the changes you need."), reply_markup=build_nav_keyboard())]
 
         mobile_for_change = derive_mobile_from_message(message, existing_mobile)
         order_id = existing_session.pending_change_order_id
@@ -1810,7 +1818,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         existing_session.awaiting_order_cancel_reason = True
         return [
             OutgoingMessage(
-                text=with_footer(f"Please share the reason for cancelling Order #{existing_session.pending_cancel_order_id}."),
+                text=with_footer(f"Please tell us why you would like to cancel Order #{existing_session.pending_cancel_order_id}."),
                 reply_markup=build_nav_keyboard(),
             )
         ]
@@ -1818,7 +1826,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
     if existing_session.awaiting_order_cancel_reason:
         reason = (message.text or "").strip()
         if len(reason) < 3:
-            return [OutgoingMessage(text=with_footer("Please enter a valid cancellation reason."), reply_markup=build_nav_keyboard())]
+            return [OutgoingMessage(text=with_footer("Please provide a brief reason for cancellation."), reply_markup=build_nav_keyboard())]
 
         mobile_for_cancel = derive_mobile_from_message(message, existing_mobile)
         order_id_int = existing_session.pending_cancel_order_id
@@ -2021,7 +2029,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
             return [
                 OutgoingMessage(
                     text=with_footer(
-                        "Please choose visit date:\n"
+                        "Select a visit date:\n"
                         "1. Today's date\n"
                         "2. Tomorrow's date\n"
                         "3. Day after tomorrow"
@@ -2204,9 +2212,9 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
             return [
                 OutgoingMessage(
                     text=with_footer(
-                        "Please share a short note for fabric delivery (optional).\n"
-                        "Example: 3 meters of cotton fabric for a shirt.\n"
-                        "Reply with 'skip' to continue without notes."
+                        "Add a note about the fabric delivery (optional).\n"
+                        "Example: 3 metres of cotton fabric for a shirt.\n"
+                        "Reply *Skip* to continue without a note."
                     ),
                     reply_markup=build_nav_keyboard(),
                 )
