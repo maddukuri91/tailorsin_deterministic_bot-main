@@ -1241,7 +1241,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
 
         return [
             OutgoingMessage(
-                text=with_footer("Please choose an address action below."),
+                text=with_footer("Select an address action below."),
                 reply_markup=build_selection_reply_markup(["Add address", "Delete address"]),
             )
         ]
@@ -1490,7 +1490,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
                     return [
                         OutgoingMessage(text=add_result.message),
                         OutgoingMessage(
-                            text=with_footer("We still need a usable pickup address. Please choose Add address below."),
+                            text=with_footer("We still need a pickup address. Select Add address below."),
                             reply_markup=build_selection_reply_markup(["Add address"]),
                         ),
                     ]
@@ -1555,7 +1555,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
             return [
                 OutgoingMessage(text=add_result.message),
                 OutgoingMessage(
-                    text=with_footer("We could not save that address. Please choose Add address to try again."),
+                    text=with_footer("We could not save that address. Select Add address to try again."),
                     reply_markup=build_selection_reply_markup(["Add address"]),
                 ),
             ]
@@ -1649,7 +1649,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
                     return [
                         OutgoingMessage(text=add_result.message),
                         OutgoingMessage(
-                            text=with_footer("We still need a usable pickup address. Please choose Add address below."),
+                            text=with_footer("We still need a pickup address. Select Add address below."),
                             reply_markup=build_selection_reply_markup(["Add address"]),
                         ),
                     ]
@@ -1714,7 +1714,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
             return [
                 OutgoingMessage(text=add_result.message),
                 OutgoingMessage(
-                    text=with_footer("We could not save that address. Please choose Add address to try again."),
+                    text=with_footer("We could not save that address. Select Add address to try again."),
                     reply_markup=build_selection_reply_markup(["Add address"]),
                 ),
             ]
@@ -1929,7 +1929,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         )
         if selected_intent is None:
             return [
-                OutgoingMessage(text="Please choose one of the listed menu options."),
+                OutgoingMessage(text="Select one of the menu options below."),
                 await build_main_menu_response(message.user_id, client_type, customer_salutation),
             ]
 

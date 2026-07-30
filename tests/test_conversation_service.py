@@ -97,7 +97,7 @@ def test_unknown_text_prompts_menu():
     run(make_message("/start"))
     out = run(make_message("random gibberish"))
     texts = " ".join(o.text for o in out)
-    assert "choose one of the listed menu options" in texts
+    assert "select one of the menu options below" in texts.lower()
 
 
 def test_menu_zero_returns_main_menu():

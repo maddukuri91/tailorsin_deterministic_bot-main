@@ -56,8 +56,12 @@ def parse_telegram_update(update: dict[str, Any]) -> IncomingMessage | None:
 
     lat = location.get("latitude")
     lng = location.get("longitude")
-    location_lat = float(lat) if lat is not None else None
-    location_lng = float(lng) if lng is not None else None
+    try:
+        location_lat = float(lat) if lat is not None else None
+        location_lng = float(lng) if lng is not None else None
+    except (TypeError, ValueError):
+        location_lat = None
+        location_lng = None
 
     return IncomingMessage(
         user_id=chat_id,
