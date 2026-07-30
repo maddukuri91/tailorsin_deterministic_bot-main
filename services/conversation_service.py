@@ -298,10 +298,10 @@ def build_number_selection_reply_markup(count: int, *, include_add_address: bool
 
 
 def build_location_choice_reply_markup() -> dict[str, Any]:
-    """Offer the same location choices on Telegram and WhatsApp."""
+    """Offer consistent share, manual, and automatic-location choices."""
     return {
         "keyboard": [
-            [{"text": "Share location", "request_location": True}],
+            [{"text": "Share current location", "request_location": True}],
             [{"text": "Enter location manually"}],
             [{"text": "Skip location"}],
             *get_nav_reply_keyboard(),
@@ -309,6 +309,21 @@ def build_location_choice_reply_markup() -> dict[str, Any]:
         "resize_keyboard": True,
         "one_time_keyboard": True,
     }
+
+
+def build_location_link_fallback_reply_markup() -> dict[str, Any]:
+    """Actions available after WATI omits a shared map's coordinates."""
+    return build_selection_reply_markup([
+        "Enter location manually",
+        "Skip location",
+    ])
+
+
+LOCATION_PROMPT = (
+    "📍 *Location (optional)*\n"
+    "Share your current location to help us find the pickup address.\n\n"
+    "On WhatsApp, use Attach → Location. You can also choose an option below."
+)
 
 
 def build_pickup_time_reply_markup() -> dict[str, Any]:
@@ -893,8 +908,8 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
             return [
                 OutgoingMessage(
                     text=with_footer(
-                        "Please enter your delivery/pickup address line "
-                        "(house, area, or street)."
+                        "Please enter Address Line 1: door number, building name, street, and area. "
+                        "Do not include city or PIN code."
                     ),
                     reply_markup=build_nav_keyboard(),
                 )
@@ -904,8 +919,10 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         if not choice_text:
             return [
                 OutgoingMessage(
-                    text=with_footer("Please enter a valid number from the address list above, or reply 'add' to add a new address."),
-                    reply_markup=build_nav_keyboard(),
+                    text=with_footer("Please select a saved address below, or choose Add address."),
+                    reply_markup=build_number_selection_reply_markup(
+                        len(existing_session.pending_address_ordered_ids), include_add_address=True
+                    ),
                 )
             ]
 
@@ -913,8 +930,10 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         if not (0 <= choice_index < len(existing_session.pending_address_ordered_ids)):
             return [
                 OutgoingMessage(
-                    text=with_footer("Invalid choice. Please reply with a number from the address list above, or reply 'add' to add a new address."),
-                    reply_markup=build_nav_keyboard(),
+                    text=with_footer("That address is not available. Please select an option below."),
+                    reply_markup=build_number_selection_reply_markup(
+                        len(existing_session.pending_address_ordered_ids), include_add_address=True
+                    ),
                 )
             ]
 
@@ -945,8 +964,10 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         if not choice_text:
             return [
                 OutgoingMessage(
-                    text=with_footer("Please enter a valid number from the recent delivered orders list above."),
-                    reply_markup=build_nav_keyboard(),
+                    text=with_footer("Please select a delivered order below."),
+                    reply_markup=build_number_selection_reply_markup(
+                        len(existing_session.pending_alteration_order_ids)
+                    ),
                 )
             ]
 
@@ -954,8 +975,10 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         if not (0 <= choice_index < len(existing_session.pending_alteration_order_ids)):
             return [
                 OutgoingMessage(
-                    text=with_footer("Invalid choice. Please reply with a number from the recent delivered orders list above."),
-                    reply_markup=build_nav_keyboard(),
+                    text=with_footer("That order is not available. Please select an order below."),
+                    reply_markup=build_number_selection_reply_markup(
+                        len(existing_session.pending_alteration_order_ids)
+                    ),
                 )
             ]
 
@@ -1188,31 +1211,51 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         if normalized_text in {"1", "add", "add address"}:
             existing_session.awaiting_address_action = False
             existing_session.awaiting_address_add_line = True
-            return [OutgoingMessage(text=with_footer("Please enter address line (house/area/street)."), reply_markup=build_nav_keyboard())]
+            return [
+                OutgoingMessage(
+                    text=with_footer(
+                        "Please enter Address Line 1: door number, building name, street, and area. "
+                        "Do not include city or PIN code."
+                    ),
+                    reply_markup=build_nav_keyboard(),
+                )
+            ]
 
         if normalized_text in {"2", "delete", "delete address", "remove", "remove address"}:
             existing_session.awaiting_address_action = False
             existing_session.awaiting_address_delete_id = True
-            return [OutgoingMessage(text=with_footer("Please reply with the number of the address you'd like to delete from the list above."), reply_markup=build_nav_keyboard())]
+            return [OutgoingMessage(
+                text=with_footer("Select the address you would like to delete below."),
+                reply_markup=build_number_selection_reply_markup(
+                    len(existing_session.pending_address_list_ids)
+                ),
+            )]
 
         return [
             OutgoingMessage(
-                text=with_footer("Please reply 1 to add new address or 2 to delete an address."),
-                reply_markup=build_nav_keyboard(),
+                text=with_footer("Please choose an address action below."),
+                reply_markup=build_selection_reply_markup(["Add address", "Delete address"]),
             )
         ]
 
     if existing_session.awaiting_address_delete_id:
         choice_text = normalize_mobile(message.text or "")
         if not choice_text:
-            return [OutgoingMessage(text=with_footer("Please enter a valid number from the address list."), reply_markup=build_nav_keyboard())]
+            return [OutgoingMessage(
+                text=with_footer("Please select an address below."),
+                reply_markup=build_number_selection_reply_markup(
+                    len(existing_session.pending_address_list_ids)
+                ),
+            )]
 
         choice_index = int(choice_text) - 1
         if not (0 <= choice_index < len(existing_session.pending_address_list_ids)):
             return [
                 OutgoingMessage(
-                    text=with_footer("Invalid choice. Please reply with the number of the address you'd like to delete."),
-                    reply_markup=build_nav_keyboard(),
+                    text=with_footer("That address is not available. Please select an address below."),
+                    reply_markup=build_number_selection_reply_markup(
+                        len(existing_session.pending_address_list_ids)
+                    ),
                 )
             ]
 
@@ -1239,7 +1282,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
     if existing_session.awaiting_address_add_line:
         address_line = (message.text or "").strip()
         if len(address_line) < 5:
-            return [OutgoingMessage(text=with_footer("Please enter a valid address line."), reply_markup=build_nav_keyboard())]
+            return [OutgoingMessage(text=with_footer("Please enter a valid Address Line 1."), reply_markup=build_nav_keyboard())]
 
         existing_session.pending_address_line = address_line
         existing_session.awaiting_address_add_line = False
@@ -1284,10 +1327,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         return [
             OutgoingMessage(
                 text=with_footer(
-                    "📍 Would you like to share your current location for accurate pickup?\n\n"
-                    "1. Share location (tap the location button if available)\n"
-                    "2. Enter location manually — I'll enter lat,lng\n"
-                    "3. Skip — I'll auto-detect from your address"
+                    LOCATION_PROMPT
                 ),
                 reply_markup=build_location_choice_reply_markup(),
             )
@@ -1319,6 +1359,19 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
             )
         else:
             normalized_text = (message.text or "").strip().casefold()
+            if (message.metadata or {}).get("location_coordinates_unavailable"):
+                return [
+                    OutgoingMessage(
+                        text=with_footer(
+                            "Your map was received. To save the exact pin, please:\n\n"
+                            "1. Long-press the map you just shared and select Copy link\n"
+                            "2. Paste the link in this chat\n\n"
+                    
+                            "Or choose *Skip location* to detect coordinates from the address you entered."
+                        ),
+                        reply_markup=build_location_link_fallback_reply_markup(),
+                    )
+                ]
             # Handle the standard location-choice labels and numeric fallback.
             button_text = normalized_text
             if "." in normalized_text:
@@ -1377,10 +1430,20 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
                     message=add_result.message + add_result_message_ext,
                     address_id=add_result.address_id,
                 )
+            elif button_text in {"share location", "share current location", "location"}:
+                return [
+                    OutgoingMessage(
+                        text=with_footer(
+                            "To share your current location, tap WhatsApp's attachment (+) icon, "
+                            "then choose *Location* and send it here."
+                        ),
+                        reply_markup=build_location_choice_reply_markup(),
+                    )
+                ]
             else:
                 return [
                     OutgoingMessage(
-                        text=with_footer("Invalid choice. Please tap a button above or reply 2 to enter coordinates manually, 3 to skip."),
+                        text=with_footer("Please share a WhatsApp location, or choose an option below."),
                         reply_markup=build_location_choice_reply_markup(),
                     )
                 ]
@@ -1419,8 +1482,8 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
                     return [
                         OutgoingMessage(text=add_result.message),
                         OutgoingMessage(
-                            text=with_footer("We still could not use that address for pickup. Please reply 1 to add a new address."),
-                            reply_markup=build_nav_keyboard(),
+                            text=with_footer("We still need a usable pickup address. Please choose Add address below."),
+                            reply_markup=build_selection_reply_markup(["Add address"]),
                         ),
                     ]
                 return [
@@ -1484,8 +1547,8 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
             return [
                 OutgoingMessage(text=add_result.message),
                 OutgoingMessage(
-                    text=with_footer("We could not save that address. Please reply 1 to add a new address."),
-                    reply_markup=build_nav_keyboard(),
+                    text=with_footer("We could not save that address. Please choose Add address to try again."),
+                    reply_markup=build_selection_reply_markup(["Add address"]),
                 ),
             ]
 
@@ -1578,8 +1641,8 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
                     return [
                         OutgoingMessage(text=add_result.message),
                         OutgoingMessage(
-                            text=with_footer("We still could not use that address for pickup. Please reply 1 to add a new address."),
-                            reply_markup=build_nav_keyboard(),
+                            text=with_footer("We still need a usable pickup address. Please choose Add address below."),
+                            reply_markup=build_selection_reply_markup(["Add address"]),
                         ),
                     ]
                 return [
@@ -1643,8 +1706,8 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
             return [
                 OutgoingMessage(text=add_result.message),
                 OutgoingMessage(
-                    text=with_footer("We could not save that address. Please reply 1 to add a new address."),
-                    reply_markup=build_nav_keyboard(),
+                    text=with_footer("We could not save that address. Please choose Add address to try again."),
+                    reply_markup=build_selection_reply_markup(["Add address"]),
                 ),
             ]
 
@@ -1660,8 +1723,10 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         if not choice_text:
             return [
                 OutgoingMessage(
-                    text=with_footer("Please enter a valid number from the orders list above."),
-                    reply_markup=build_nav_keyboard(),
+                    text=with_footer("Please select an order below."),
+                    reply_markup=build_number_selection_reply_markup(
+                        len(existing_session.pending_change_order_ids)
+                    ),
                 )
             ]
 
@@ -1669,8 +1734,10 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         if not (0 <= choice_index < len(existing_session.pending_change_order_ids)):
             return [
                 OutgoingMessage(
-                    text=with_footer("Invalid choice. Please reply with a number from the orders list above."),
-                    reply_markup=build_nav_keyboard(),
+                    text=with_footer("That order is not available. Please select an order below."),
+                    reply_markup=build_number_selection_reply_markup(
+                        len(existing_session.pending_change_order_ids)
+                    ),
                 )
             ]
 
@@ -1720,8 +1787,10 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         if not choice_text:
             return [
                 OutgoingMessage(
-                    text=with_footer("Please enter a valid number from the orders list above."),
-                    reply_markup=build_nav_keyboard(),
+                    text=with_footer("Please select an order below."),
+                    reply_markup=build_number_selection_reply_markup(
+                        len(existing_session.pending_cancel_order_ids)
+                    ),
                 )
             ]
 
@@ -1729,8 +1798,10 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         if not (0 <= choice_index < len(existing_session.pending_cancel_order_ids)):
             return [
                 OutgoingMessage(
-                    text=with_footer("Invalid choice. Please reply with a number from the orders list above."),
-                    reply_markup=build_nav_keyboard(),
+                    text=with_footer("That order is not available. Please select an order below."),
+                    reply_markup=build_number_selection_reply_markup(
+                        len(existing_session.pending_cancel_order_ids)
+                    ),
                 )
             ]
 

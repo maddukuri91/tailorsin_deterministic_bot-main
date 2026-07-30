@@ -5,8 +5,11 @@ Provides a Telegram-like inline keyboard experience on WhatsApp using
 WATI's interactive list and button message APIs.
 """
 
+import json
+import logging
 import re
 from typing import Any
+from urllib.parse import unquote
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException
@@ -17,6 +20,7 @@ from services.idempotency import claim_event, release_event
 
 
 router = APIRouter(prefix="/wati", tags=["wati"])
+logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────
 #  Interactive message type constants
@@ -25,6 +29,28 @@ router = APIRouter(prefix="/wati", tags=["wati"])
 MAX_LIST_ROWS = 10
 # WhatsApp interactive buttons support up to 3 buttons
 MAX_BUTTONS = 3
+
+_MAP_LOCATION_PATTERN = re.compile(
+    r"(?:geo:|[?&](?:q|query|ll|center)=|@)"
+    r"\s*([-+]?\d{1,2}(?:\.\d+)?)\s*(?:,|%2c)\s*"
+    r"([-+]?\d{1,3}(?:\.\d+)?)",
+    flags=re.IGNORECASE,
+)
+
+_WATI_DEBUG_REDACTED_KEYS = {
+    "authorization",
+    "apikey",
+    "api_key",
+    "body",
+    "from",
+    "phone",
+    "phone_number",
+    "senderphone",
+    "text",
+    "token",
+    "waid",
+    "whatsappnumber",
+}
 
 WATI_NAVIGATION_MARKUP: dict[str, Any] = {
     "inline_keyboard": [[
@@ -153,6 +179,133 @@ def _extract_contact_phone(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _extract_location(payload: dict[str, Any]) -> tuple[float | None, float | None]:
+    """Extract a shared WhatsApp location from WATI webhook payloads.
+
+    WATI tenants send location data in several forms, including nested
+    dictionaries and a JSON-encoded ``data`` string. Decode only JSON-shaped
+    strings so ordinary customer text is never interpreted as payload data.
+    """
+    candidates: list[dict[str, Any]] = []
+    string_values: list[str] = []
+    stack: list[Any] = [payload]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, dict):
+            candidates.append(value)
+            stack.extend(value.values())
+        elif isinstance(value, list):
+            stack.extend(value)
+        elif isinstance(value, str):
+            string_values.append(value)
+            compact_value = value.strip()
+            if (
+                len(compact_value) <= 16_384
+                and compact_value[:1] in {"{", "["}
+            ):
+                try:
+                    decoded = json.loads(compact_value)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(decoded, (dict, list)):
+                    stack.append(decoded)
+
+    for candidate in candidates:
+        latitude = candidate.get(
+            "latitude",
+            candidate.get("lat", candidate.get("latitudeDegrees")),
+        )
+        longitude = candidate.get(
+            "longitude",
+            candidate.get(
+                "lng",
+                candidate.get("long", candidate.get("lon", candidate.get("longitudeDegrees"))),
+            ),
+        )
+        try:
+            lat_value = float(latitude)
+            lng_value = float(longitude)
+        except (TypeError, ValueError):
+            pass
+        else:
+            if -90 <= lat_value <= 90 and -180 <= lng_value <= 180:
+                return lat_value, lng_value
+
+        # GeoJSON-style locations are occasionally returned as
+        # {"coordinates": [longitude, latitude]}.
+        coordinates = candidate.get("coordinates")
+        if isinstance(coordinates, (list, tuple)) and len(coordinates) >= 2:
+            try:
+                lng_value = float(coordinates[0])
+                lat_value = float(coordinates[1])
+            except (TypeError, ValueError):
+                continue
+            if -90 <= lat_value <= 90 and -180 <= lng_value <= 180:
+                return lat_value, lng_value
+
+    # Some WATI tenants provide a Google Maps / geo URI rather than separate
+    # numeric fields. Parse coordinates only from an explicit map-location URI
+    # so ordinary customer text can never be mistaken for a location.
+    for value in string_values:
+        match = _MAP_LOCATION_PATTERN.search(unquote(value))
+        if not match:
+            continue
+        lat_value, lng_value = map(float, match.groups())
+        if -90 <= lat_value <= 90 and -180 <= lng_value <= 180:
+            return lat_value, lng_value
+
+    return None, None
+
+
+def _payload_key_paths(payload: Any, *, max_depth: int = 4) -> list[str]:
+    """Return structural key paths only; never log customer values or IDs."""
+    paths: list[str] = []
+    stack: list[tuple[Any, str, int]] = [(payload, "", 0)]
+    while stack and len(paths) < 80:
+        value, prefix, depth = stack.pop()
+        if not isinstance(value, dict) or depth >= max_depth:
+            continue
+        for key, child in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            paths.append(path)
+            if isinstance(child, dict):
+                stack.append((child, path, depth + 1))
+            elif isinstance(child, list):
+                for item in child[:3]:
+                    stack.append((item, f"{path}[]", depth + 1))
+    return sorted(set(paths))
+
+
+def _safe_wati_debug_payload(payload: Any) -> str:
+    """Serialize diagnostics without customer content or credentials."""
+    def redact(value: Any, key: str | None = None) -> Any:
+        if key is not None and key.casefold() in _WATI_DEBUG_REDACTED_KEYS:
+            return "[redacted]"
+        if isinstance(value, dict):
+            return {str(child_key): redact(child_value, str(child_key)) for child_key, child_value in value.items()}
+        if isinstance(value, list):
+            return [redact(item) for item in value[:20]]
+        if isinstance(value, str) and len(value) > 500:
+            return f"{value[:500]}…[truncated]"
+        return value
+
+    return json.dumps(redact(payload), default=str)[:4000]
+
+
+def _is_location_event(payload: Any) -> bool:
+    """Identify a location webhook without relying on one WATI envelope."""
+    stack: list[Any] = [payload]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, dict):
+            if str(value.get("type", "")).casefold() == "location":
+                return True
+            stack.extend(value.values())
+        elif isinstance(value, list):
+            stack.extend(value)
+    return False
+
+
 def validate_wati_webhook_secret(header_secret: str | None) -> None:
     if not settings.wati_webhook_secret:
         return
@@ -187,10 +340,20 @@ def parse_wati_update(update: dict[str, Any]) -> IncomingMessage | None:
     text = interactive_text or _extract_text(source_data if isinstance(source_data, dict) else update)
     text = _normalize_wati_list_selection(text)
     contact_phone = _extract_contact_phone(source_data if isinstance(source_data, dict) else update)
+    location_lat, location_lng = _extract_location(source_data if isinstance(source_data, dict) else update)
+    if location_lat is None or location_lng is None:
+        location_lat, location_lng = _extract_location(update)
+    message_type = str(
+        (source_data if isinstance(source_data, dict) else update).get("type")
+        or update.get("type", "")
+    ).casefold()
+    if message_type == "location" and (location_lat is None or location_lng is None):
+        logger.warning(
+            "WATI location event did not contain readable coordinates; payload=%s",
+            _safe_wati_debug_payload(update),
+        )
     interactive_message_types = {"interactive", "button", "list"}
-    is_menu_selection = bool(interactive_text) or str(
-        (source_data if isinstance(source_data, dict) else update).get("type", "")
-    ).casefold() in interactive_message_types
+    is_menu_selection = bool(interactive_text) or message_type in interactive_message_types
 
     return IncomingMessage(
         user_id=user_id,
@@ -198,12 +361,22 @@ def parse_wati_update(update: dict[str, Any]) -> IncomingMessage | None:
         contact_phone=contact_phone,
         contact_user_id=user_id if contact_phone else None,
         source_user_id=user_id,
+        location_lat=location_lat,
+        location_lng=location_lng,
         is_start_command=text.casefold() in {"/start", "hi", "hello", "menu"},
         metadata={
             "platform": "wati",
             "raw_update": update,
             "message_id": source_data.get("messageId") or source_data.get("id") or update.get("messageId") or update.get("id"),
             "is_menu_selection": is_menu_selection,
+            # Some WATI accounts represent an inbound map as a location event
+            # with data=null. Preserve that fact so the conversation can give
+            # an actionable map-link fallback instead of repeating the same
+            # location request.
+            "location_coordinates_unavailable": (
+                message_type == "location"
+                and (location_lat is None or location_lng is None)
+            ),
         },
     )
 
@@ -240,6 +413,45 @@ async def call_wati_api(
         response.raise_for_status()
 
 
+async def fetch_latest_wati_location(user_id: int) -> tuple[float | None, float | None]:
+    """Recover location coordinates omitted from a WATI webhook body.
+
+    WATI stores the complete inbound message, even when a tenant's webhook
+    event only contains a map notification. This fallback is called only for
+    inbound location events that did not already include coordinates.
+    """
+    if not settings.wati_base_url or not settings.wati_api_key:
+        return None, None
+
+    api_key = settings.wati_api_key.strip()
+    if api_key.lower().startswith("bearer "):
+        api_key = api_key[7:].strip()
+    url = f"{settings.wati_base_url.rstrip('/')}/api/v1/getMessages/{user_id}"
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.http_timeout) as client:
+            response = await client.get(
+                url,
+                params={"pageSize": "10", "pageNumber": "1"},
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            response.raise_for_status()
+            response_data = response.json()
+    except Exception:
+        logger.warning("WATI message-history lookup failed for a location event", exc_info=True)
+        return None, None
+
+    if not isinstance(response_data, (dict, list)):
+        return None, None
+    result = _extract_location(response_data)
+    if result == (None, None):
+        logger.warning(
+            "WATI getMessages fallback returned no coordinates; response=%s",
+            _safe_wati_debug_payload(response_data),
+        )
+    return result
+
+
 # ──────────────────────────────────────────────
 #  Interactive message builders
 # ──────────────────────────────────────────────
@@ -268,7 +480,12 @@ def _extract_buttons_from_reply_markup(reply_markup: dict[str, Any]) -> list[dic
     if keyboard_rows:
         for row in keyboard_rows:
             for button in row:
-                if button.get("text") and not button.get("request_contact") and not button.get("request_location"):
+                # A WhatsApp list cannot invoke the native location picker,
+                # but it should still present a clear "Share current
+                # location" action. The conversation service gives the
+                # customer the platform-specific attachment instruction after
+                # they choose it.
+                if button.get("text") and not button.get("request_contact"):
                     buttons.append({
                         "text": button["text"],
                         "callback_data": "",
@@ -462,6 +679,14 @@ async def process_wati_update(update: dict[str, Any]) -> dict[str, bool]:
     incoming_message = parse_wati_update(update)
     if incoming_message is None:
         return {"ok": True}
+
+    if (
+        _is_location_event(update)
+        and (incoming_message.location_lat is None or incoming_message.location_lng is None)
+    ):
+        incoming_message.location_lat, incoming_message.location_lng = await fetch_latest_wati_location(
+            incoming_message.user_id
+        )
 
     metadata = incoming_message.metadata or {}
     event_id = str(metadata.get("message_id") or "")

@@ -1,4 +1,4 @@
-from channels.wati import build_wati_payload, parse_wati_update
+from channels.wati import _is_location_event, _safe_wati_debug_payload, build_wati_payload, parse_wati_update
 from services.conversation_service import OutgoingMessage
 
 
@@ -31,14 +31,14 @@ def test_wati_plain_subflow_has_navigation_buttons():
     assert [button["text"] for button in buttons] == ["Main menu", "Human support"]
 
 
-def test_wati_location_step_keeps_manual_and_navigation_choices():
+def test_wati_location_step_keeps_share_manual_skip_and_navigation_choices():
     payload = build_wati_payload(
         919876543210,
         OutgoingMessage(
             "Choose location.",
             {
                 "keyboard": [
-                    [{"text": "Share location", "request_location": True}],
+                    [{"text": "Share current location", "request_location": True}],
                     [{"text": "Enter location manually"}],
                     [{"text": "Skip location"}],
                     [{"text": "Main menu"}],
@@ -49,6 +49,7 @@ def test_wati_location_step_keeps_manual_and_navigation_choices():
     )
 
     titles = [row["title"] for section in payload["sections"] for row in section["rows"]]
+    assert "Share current location" in titles
     assert "Enter location manually" in titles
     assert "Skip location" in titles
     assert titles[-2:] == ["Main menu", "Human support"]
@@ -62,6 +63,88 @@ def test_wati_parses_camel_case_interactive_reply():
 
     assert message is not None
     assert message.text == "menu_address_update"
+
+
+def test_wati_parses_shared_location_from_nested_location_payload():
+    message = parse_wati_update({
+        "waId": "919876543210",
+        "type": "location",
+        "location": {"latitude": "17.3850", "longitude": "78.4867"},
+    })
+
+    assert message is not None
+    assert message.location_lat == 17.3850
+    assert message.location_lng == 78.4867
+
+
+def test_wati_parses_shared_location_from_deep_message_payload():
+    message = parse_wati_update({
+        "waId": "919876543210",
+        "data": {
+            "message": {
+                "locationMessage": {"lat": 17.3845, "lon": 78.4852},
+            }
+        },
+    })
+
+    assert message is not None
+    assert message.location_lat == 17.3845
+    assert message.location_lng == 78.4852
+
+
+def test_wati_parses_shared_location_from_json_encoded_data():
+    message = parse_wati_update({
+        "waId": "919876543210",
+        "type": "location",
+        "data": '{"location":{"latitudeDegrees":17.3845,"longitudeDegrees":78.4852}}',
+    })
+
+    assert message is not None
+    assert message.location_lat == 17.3845
+    assert message.location_lng == 78.4852
+
+
+def test_wati_parses_shared_location_from_google_maps_url():
+    message = parse_wati_update({
+        "waId": "919876543210",
+        "type": "location",
+        "data": {"mapUrl": "https://maps.google.com/?q=17.3845%2C78.4852"},
+    })
+
+    assert message is not None
+    assert message.location_lat == 17.3845
+    assert message.location_lng == 78.4852
+
+
+def test_wati_parses_coordinates_from_google_maps_link_pasted_as_text():
+    message = parse_wati_update({
+        "waId": "919876543210",
+        "type": "text",
+        "text": "https://maps.google.com/?q=17.390022,78.366081",
+    })
+
+    assert message is not None
+    assert message.location_lat == 17.390022
+    assert message.location_lng == 78.366081
+
+
+def test_wati_recognizes_nested_location_event_for_history_fallback():
+    assert _is_location_event({"eventType": "messageReceived", "data": {"type": "location"}})
+    assert not _is_location_event({"eventType": "messageReceived", "data": {"type": "text"}})
+
+
+def test_wati_debug_payload_redacts_customer_content_and_credentials():
+    logged = _safe_wati_debug_payload({
+        "waId": "919876543210",
+        "text": "customer message",
+        "Authorization": "Bearer secret",
+        "location": {"latitude": 17.3845, "longitude": 78.4852},
+    })
+
+    assert "919876543210" not in logged
+    assert "customer message" not in logged
+    assert "Bearer secret" not in logged
+    assert "17.3845" in logged
 
 
 def test_wati_parses_documented_top_level_list_reply():

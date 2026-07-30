@@ -85,6 +85,7 @@ def test_selection_builders_always_include_standard_navigation():
         svc.build_visit_slot_reply_markup(["10:00 AM", "2:00 PM"]),
         svc.build_number_selection_reply_markup(2, include_add_address=True),
         svc.build_location_choice_reply_markup(),
+        svc.build_location_link_fallback_reply_markup(),
     ]
 
     for markup in builders:
@@ -188,6 +189,34 @@ def test_wati_numbered_address_selection_advances_to_pickup_date():
     assert session.awaiting_pickup_address is False
     assert session.awaiting_pickup_date is True
     assert session.pending_pickup_address_id == 11
+
+
+def test_invalid_address_delete_choice_repeats_address_selection_controls():
+    async def prepare_delete_step():
+        session = await get_session(CHAT_ID)
+        session.awaiting_address_delete_id = True
+        session.pending_address_list_ids = [11, 12]
+        await save_session(session)
+
+    asyncio.get_event_loop().run_until_complete(prepare_delete_step())
+    out = run(make_message("3"))
+
+    labels = [button["text"] for row in out[0].reply_markup["keyboard"] for button in row]
+    assert labels == ["1", "2", "Main menu", "Human support"]
+
+
+def test_invalid_order_choices_repeat_the_relevant_order_controls():
+    async def prepare_order_steps():
+        session = await get_session(CHAT_ID)
+        session.awaiting_order_change_select = True
+        session.pending_change_order_ids = [101, 102]
+        await save_session(session)
+
+    asyncio.get_event_loop().run_until_complete(prepare_order_steps())
+    out = run(make_message("3"))
+
+    labels = [button["text"] for row in out[0].reply_markup["keyboard"] for button in row]
+    assert labels == ["1", "2", "Main menu", "Human support"]
 
 
 def test_pickup_date_parsing():
