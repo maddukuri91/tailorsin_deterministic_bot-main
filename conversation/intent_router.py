@@ -1,6 +1,6 @@
 import re
 
-from conversation.menu import _icon, get_menu_options
+from conversation.menu import MAIN_MENU_ID, SEGMENT_MENU_OPTIONS, _icon, get_menu_options
 
 
 VISIT_HISTORY_INPUTS = {
@@ -67,14 +67,24 @@ _LEGACY_LABEL_ALIASES = (
     {"label": "Drop off fabric at store", "intent": "fabric_delivery"},
     {"label": "Learn about tailorsin.com", "intent": "about"},
     {"label": "Register to place an order / book a visit", "intent": "register"},
+    # Renamed when the nested menus were introduced. Messages sent before the
+    # change are still on customers' screens, so keep them tappable.
+    {"label": "Price Catalog", "intent": "pricing"},
+    {"label": "Schedule Pick-up", "intent": "register"},
 )
 
 
 def _all_menu_options(menu: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Return current and cross-segment options, without duplicate intents."""
+    """Return every known option, so a label resolves from any menu level.
+
+    Labels are matched across all segments and nested menus because a customer
+    may tap a button from an older message, or from a different segment, after
+    their client type changes.
+    """
     options = [*menu, *_NAVIGATION_OPTIONS, *_LEGACY_LABEL_ALIASES]
-    for segment in ("active_client", "client", "new_user"):
-        options.extend(get_menu_options(segment))
+    for segment_menus in SEGMENT_MENU_OPTIONS.values():
+        for segment_menu in segment_menus.values():
+            options.extend(segment_menu)
 
     unique: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
@@ -125,9 +135,15 @@ def _find_intent(options: list[dict[str, str]], value: str) -> str | None:
     return None
 
 
-def get_intent(client_type, option):
+def get_intent(client_type, option, menu_id: str = MAIN_MENU_ID):
+    """Resolve a customer's choice to an intent.
 
-    menu = get_menu_options(client_type)
+    ``menu_id`` is the menu the customer is currently looking at. Numeric
+    replies are resolved against that menu so a number inside a nested menu
+    (for example "1" under Manage Orders) means what the customer can see.
+    """
+
+    menu = get_menu_options(client_type, menu_id)
 
     normalized_option = option.strip()
     if normalized_option.casefold() in VISIT_HISTORY_INPUTS:

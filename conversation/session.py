@@ -8,6 +8,7 @@ from typing import Any
 import redis.asyncio as redis
 
 from config import settings
+from conversation.menu import MAIN_MENU_ID
 
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,9 @@ class SessionState:
     pending_address_lat: float | None = None
     pending_address_lng: float | None = None
     awaiting_manual_coordinates: bool = False
+    # Which menu the customer is currently looking at: "main" or the id of a
+    # nested menu they opened. Numeric replies are resolved against it.
+    current_menu: str = MAIN_MENU_ID
     last_activity_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict[str, Any]:

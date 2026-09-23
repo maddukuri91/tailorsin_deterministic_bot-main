@@ -8,11 +8,15 @@ from conversation.intent_router import get_intent
 from config import settings
 from services.geocoder import geocode_address
 from conversation.menu import (
+    MAIN_MENU_ID,
+    MENU_PROMPTS,
     format_menu_message_with_greeting,
+    get_follow_up_menu,
     get_menu_inline_keyboard,
     get_menu_reply_keyboard,
     get_nav_inline_keyboard,
     get_nav_reply_keyboard,
+    is_menu_only_action,
 )
 from conversation.session import (
     begin_session_scope,
@@ -64,9 +68,8 @@ def with_footer(text: str) -> str:
 
 TAILORSIN_OVERVIEW = (
 """
-tailorsin.com collects your fabric, stitches your garments, and delivers them—typically within 24 hours after design approval and cloth pickup.
 
-*How tailorsin.com Works*
+*How Tailorsin.com Works*
 
 1. *Schedule a Pickup*
 • We collect your fabric from your location, or you can drop it off at our store.
@@ -76,7 +79,7 @@ tailorsin.com collects your fabric, stitches your garments, and delivers them—
 • Within 6 business hours, our team contacts you to confirm the design and share a stitching estimate.
 
 3. *Approve the Estimate & Make Payment*
-• Once you approve the estimate and complete the payment, we begin stitching.
+• Once you approve the estimate and complete the payment, we provide you a delivery date and start the process of stitching your outfit.
 
 4. *Stitching & Delivery*
 • Your stitched garments are delivered to your doorstep.
@@ -84,46 +87,15 @@ tailorsin.com collects your fabric, stitches your garments, and delivers them—
 5. *Free Alterations*
 • Free fitting alterations are available within 7 days of delivery.
 
-*Measurement Policy*
 
-• We do *not* provide home measurement services.
-• Please provide a sample/reference garment or book a store visit.
-
-*Delivery Timeline*
-
-• Most orders are completed within *24 hours* of cloth pickup after estimate approval and payment.
-
-*Alteration Policy*
-
-• Free alterations are available within *7 days* of bill generation for fitting issues.
-
-*Service Areas*
-
-• Pickup & delivery across *Hyderabad*.
-• Customers from other cities can also place orders by sending their fabric.
-
-*Garments We Stitch*
-
-• Men's Wear
-• Women's Wear
-• Kids' Wear
-
-*Price List*
+*Price List, Terms & Conditions*
 
 https://drive.google.com/file/d/1s67qOzn2n22lN670ir0Le462FcgGyCGL/view?usp=sharing
 
 """
 )
 
-# WATI/WhatsApp permits at most 1,024 characters in an interactive-message
-# body. Keep the overview in two deliberate, readable sections so no service
-# information is silently truncated by the provider.
-_OVERVIEW_SPLIT_MARKER = "*Delivery Timeline*"
-_overview_split_at = TAILORSIN_OVERVIEW.index(_OVERVIEW_SPLIT_MARKER)
-TAILORSIN_OVERVIEW_SECTIONS = (
-    TAILORSIN_OVERVIEW[:_overview_split_at].strip(),
-    TAILORSIN_OVERVIEW[_overview_split_at:].strip(),
-)
+TAILORSIN_OVERVIEW_MESSAGE = TAILORSIN_OVERVIEW.strip()
 
 
 @dataclass
@@ -146,25 +118,28 @@ class OutgoingMessage:
     include_wati_navigation: bool = True
 
 
-async def build_intent_response(intent_name: str, client_type: str) -> list[OutgoingMessage] | None:
+async def build_intent_response(
+    intent_name: str,
+    client_type: str,
+    menu_id: str = MAIN_MENU_ID,
+) -> list[OutgoingMessage] | None:
+    # Actions such as "How this Works" and "Price Catalogue" show their content
+    # and then reveal the nested menu for that action.
+    follow_up_menu_id = get_follow_up_menu(client_type, intent_name, menu_id) or menu_id
+
     if intent_name == "about":
-        sections = [
-            OutgoingMessage(text=text, include_wati_navigation=False)
-            for text in TAILORSIN_OVERVIEW_SECTIONS[:-1]
-        ]
-        sections.append(
+        return [
             OutgoingMessage(
-                text=TAILORSIN_OVERVIEW_SECTIONS[-1],
-                reply_markup=build_menu_reply_markup(client_type),
+                text=TAILORSIN_OVERVIEW_MESSAGE,
+                reply_markup=build_menu_reply_markup(client_type, follow_up_menu_id),
             )
-        )
-        return sections
+        ]
 
     if intent_name == "browse":
         return [
             OutgoingMessage(
                 text=await build_browse_response(),
-                reply_markup=build_menu_reply_markup(client_type),
+                reply_markup=build_menu_reply_markup(client_type, follow_up_menu_id),
             )
         ]
 
@@ -172,7 +147,7 @@ async def build_intent_response(intent_name: str, client_type: str) -> list[Outg
         return [
             OutgoingMessage(
                 text=await build_pricing_response(client_type),
-                reply_markup=build_menu_reply_markup(client_type),
+                reply_markup=build_menu_reply_markup(client_type, follow_up_menu_id),
             )
         ]
 
@@ -259,10 +234,10 @@ def build_contact_keyboard() -> dict[str, Any]:
     }
 
 
-def build_menu_reply_markup(client_type: str) -> dict[str, Any]:
-    """Build an inline keyboard markup for the menu (Telegram inline buttons)."""
+def build_menu_reply_markup(client_type: str, menu_id: str = MAIN_MENU_ID) -> dict[str, Any]:
+    """Build an inline keyboard markup for a menu (Telegram inline buttons)."""
     return {
-        "inline_keyboard": get_menu_inline_keyboard(client_type),
+        "inline_keyboard": get_menu_inline_keyboard(client_type, menu_id),
     }
 
 
@@ -456,6 +431,10 @@ def clear_all_flows(session: Any) -> None:
     session.pending_visit_date = None
     session.pending_visit_slots = []
     session.address_needed_for_pickup = False
+    # NOTE: `current_menu` is intentionally left untouched. This helper runs
+    # while a menu tap is being processed, and the cursor is still needed to
+    # interpret that tap (see the intent resolution in _handle_incoming_message).
+    # Every path that shows a main menu resets the cursor itself.
 
 
 def clear_address_update_flow(session: Any) -> None:
@@ -551,6 +530,9 @@ async def build_main_menu_response(
     session = await get_session(user_id)
     is_repeat = client_type in RETURNING_CLIENT_TYPES and session.has_seen_known_customer_menu
 
+    # A main menu always resets any nested menu the customer was browsing.
+    session.current_menu = MAIN_MENU_ID
+
     if client_type in RETURNING_CLIENT_TYPES:
         session.has_seen_known_customer_menu = True
         await save_session(session)
@@ -618,8 +600,12 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
     # --- Early navigation interceptor: allow escape from any sub-flow ---
     if message.text:
         normalized_text = (message.text or "").strip().casefold()
-        # Also resolve via get_intent to handle full button tap text like "9. 💬 Chat with a human agent"
-        interceptor_intent = get_intent(existing_client_type or "new_user", message.text)
+        # Also resolve via get_intent to handle full button tap text like "6. 💬 Human Support"
+        interceptor_intent = get_intent(
+            existing_client_type or "new_user",
+            message.text,
+            existing_session.current_menu,
+        )
 
         if normalized_text in {"0", "10", "menu", "main menu"} or interceptor_intent == "main_menu":
             clear_all_flows(existing_session)
@@ -638,6 +624,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
                 )
 
             if resolved_client == "new_user":
+                existing_session.current_menu = MAIN_MENU_ID
                 existing_session.awaiting_registration_name = True
                 return [
                     OutgoingMessage(
@@ -647,6 +634,9 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
                 ]
 
             clear_all_flows(existing_session)
+            # Handover replies carry no menu, so drop any nested cursor to keep
+            # the customer's next choice aligned with the main menu.
+            existing_session.current_menu = MAIN_MENU_ID
             mobile_for_handover = derive_mobile_from_message(message, existing_mobile)
             if not mobile_for_handover:
                 mobile_for_handover = auto_mobile or existing_mobile
@@ -674,7 +664,9 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         # selection, but a value such as "1" is not a fresh main-menu tap.
         # Treating it as one restarts New Order instead of advancing the flow.
         tapped_intent = None if selection_text.isdigit() else get_intent(
-            existing_client_type or "new_user", message.text
+            existing_client_type or "new_user",
+            message.text,
+            existing_session.current_menu,
         )
         if tapped_intent and tapped_intent not in {"main_menu", "handover"}:
             clear_all_flows(existing_session)
@@ -1919,11 +1911,17 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         return [await build_main_menu_response(message.user_id, client_type, customer_salutation)]
 
     if message.text:
-        selected_intent = get_intent(client_type, message.text)
+        # Resolve the choice against the menu the customer is looking at. The
+        # nested-menu context is then released: it only applies until the
+        # customer acts on it, since every flow ends at a main menu.
+        active_menu_id = existing_session.current_menu or MAIN_MENU_ID
+        selected_intent = get_intent(client_type, message.text, active_menu_id)
+        existing_session.current_menu = MAIN_MENU_ID
         logger.info(
-            "intent_resolved user_id=%s client_type=%s intent=%s text=%r",
+            "intent_resolved user_id=%s client_type=%s menu=%s intent=%s text=%r",
             message.user_id,
             client_type,
+            active_menu_id,
             selected_intent,
             (message.text or "")[:80],
         )
@@ -1932,6 +1930,26 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
                 OutgoingMessage(text="Select one of the menu options below."),
                 await build_main_menu_response(message.user_id, client_type, customer_salutation),
             ]
+
+        # Some actions reveal a nested menu. Remember it so numbered replies
+        # resolve against the options the customer can actually see.
+        follow_up_menu_id = get_follow_up_menu(client_type, selected_intent, active_menu_id)
+        if follow_up_menu_id:
+            existing_session.current_menu = follow_up_menu_id
+            if is_menu_only_action(client_type, selected_intent):
+                logger.info(
+                    "submenu_opened user_id=%s menu=%s",
+                    message.user_id,
+                    follow_up_menu_id,
+                )
+                return [
+                    OutgoingMessage(
+                        text=MENU_PROMPTS.get(
+                            follow_up_menu_id, "Please choose an option below."
+                        ),
+                        reply_markup=build_menu_reply_markup(client_type, follow_up_menu_id),
+                    )
+                ]
 
         if client_type == "new_user" and selected_intent in {"visit", "book_visit", "handover"}:
             mobile_for_registration = derive_mobile_from_message(message, mobile)
@@ -2342,7 +2360,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
             )
             ]
 
-        intent_response = await build_intent_response(selected_intent, client_type)
+        intent_response = await build_intent_response(selected_intent, client_type, active_menu_id)
         if intent_response is not None:
             return intent_response
 

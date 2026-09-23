@@ -20,6 +20,7 @@ _OPTION_ICONS: dict[str, str] = {
     "handover": "💬",
     # Services
     "new_order": "➕",
+    "manage_orders": "📁",
     "fabric_estimate": "📐",
     "fabric_delivery": "📦",
     "book_visit": "📅",
@@ -44,41 +45,112 @@ def _icon(intent: str) -> str:
 
 
 # ──────────────────────────────────────────────
-#  Common options (shared across segments)
+#  Menu definitions
 # ──────────────────────────────────────────────
+# Each menu is an ordered list of {"label", "intent"} options. The "main" menu
+# is the entry point for a customer segment; every other menu is a nested
+# follow-up that is revealed after a related action is chosen.
 
-COMMON_OPTIONS = [
+MAIN_MENU_ID = "main"
+
+NEW_USER_MENU = [
+    {"label": "How this Works", "intent": "about"},
+    {"label": "Price Catalogue", "intent": "pricing"},
+    {"label": "Signup",          "intent": "register"},
+]
+
+# Revealed beneath the "How this Works" overview.
+NEW_USER_ABOUT_MENU = [
+    {"label": "Price Catalogue", "intent": "pricing"},
+    {"label": "Signup",          "intent": "register"},
+]
+
+# Revealed beneath the "Price Catalogue" pricing details.
+NEW_USER_PRICING_MENU = [
+    {"label": "Price Estimate", "intent": "fabric_estimate"},
+    {"label": "Book Visit",     "intent": "book_visit"},
+]
+
+CLIENT_MENU = [
+    {"label": "New Order",       "intent": "new_order"},
     {"label": "Book Visit",      "intent": "book_visit"},
-    {"label": "Report Issue",    "intent": "alteration_pickup_recent"},
+    {"label": "Price Catalogue", "intent": "pricing"},
     {"label": "Price Estimate",  "intent": "fabric_estimate"},
-    {"label": "Price Catalog",   "intent": "pricing"},
     {"label": "Update Address",  "intent": "address_update"},
     {"label": "Human Support",   "intent": "handover"},
 ]
 
-SEGMENT_MENU_OPTIONS = {
+# Revealed beneath "New Order" for a customer who has ordered before.
+CLIENT_ORDERS_MENU = [
+    {"label": "New Order",   "intent": "new_order"},
+    {"label": "Drop Fabric", "intent": "fabric_delivery"},
+    {"label": "Book Visit",  "intent": "book_visit"},
+]
 
-    "active_client": [
-        {"label": "Track Order",  "intent": "order_status"},
-        {"label": "Modify Order", "intent": "order_changes"},
-        {"label": "Cancel Order", "intent": "order_cancel"},
-        {"label": "New Order",    "intent": "new_order"},
-        *COMMON_OPTIONS,
-    ],
+ACTIVE_CLIENT_MENU = [
+    {"label": "Manage Orders",   "intent": "manage_orders"},
+    {"label": "Book Visit",      "intent": "book_visit"},
+    {"label": "Price Catalogue", "intent": "pricing"},
+    {"label": "Price Estimate",  "intent": "fabric_estimate"},
+    {"label": "Update Address",  "intent": "address_update"},
+    {"label": "Human Support",   "intent": "handover"},
+]
 
-    "client": [
-        {"label": "New Order",      "intent": "new_order"},
-        {"label": "Drop Fabric",    "intent": "fabric_delivery"},
-        *COMMON_OPTIONS,
-    ],
+# Revealed beneath "Manage Orders" for a customer with active orders.
+ACTIVE_CLIENT_ORDERS_MENU = [
+    {"label": "Track Order",  "intent": "order_status"},
+    {"label": "Modify Order", "intent": "order_changes"},
+    {"label": "Cancel Order", "intent": "order_cancel"},
+    {"label": "Report Issue", "intent": "alteration_pickup_recent"},
+]
 
-    "new_user": [
-        {"label": "About Us", "intent": "about"},
-        {"label": "Sign Up",  "intent": "register"},
-    ],
+# client segment -> menu id -> ordered options
+SEGMENT_MENU_OPTIONS: dict[str, dict[str, list[dict[str, str]]]] = {
+    "new_user": {
+        MAIN_MENU_ID:       NEW_USER_MENU,
+        "new_user_about":   NEW_USER_ABOUT_MENU,
+        "new_user_pricing": NEW_USER_PRICING_MENU,
+    },
+    "client": {
+        MAIN_MENU_ID:   CLIENT_MENU,
+        "client_orders": CLIENT_ORDERS_MENU,
+    },
+    "active_client": {
+        MAIN_MENU_ID:            ACTIVE_CLIENT_MENU,
+        "active_client_orders":  ACTIVE_CLIENT_ORDERS_MENU,
+    },
 }
 
 KNOWN_CLIENT_TYPES: set[str] = {"active_client", "client", "new_user"}
+
+
+# Choosing one of these actions reveals the nested menu for it. Keyed by
+# (segment, intent) because the same intent can behave differently per segment.
+SUBMENU_INTENTS: dict[tuple[str, str], str] = {
+    ("new_user", "about"):              "new_user_about",
+    ("new_user", "pricing"):            "new_user_pricing",
+    ("client", "new_order"):            "client_orders",
+    ("active_client", "manage_orders"): "active_client_orders",
+}
+
+# Actions whose response *is* the nested menu. They have no content of their
+# own, so the nested menu is sent instead of running a conversation flow.
+MENU_ONLY_ACTIONS: frozenset[tuple[str, str]] = frozenset({
+    ("client", "new_order"),
+    ("active_client", "manage_orders"),
+})
+
+# Heading shown when a nested menu is opened on its own.
+MENU_PROMPTS: dict[str, str] = {
+    "client_orders": (
+        "📋 *New Order*\n"
+        "Start a fresh pickup, drop your fabric at the store, or book a store visit."
+    ),
+    "active_client_orders": (
+        "📋 *Manage Orders*\n"
+        "Track, modify, or cancel an order — or report an issue with a delivered order."
+    ),
+}
 
 
 # ──────────────────────────────────────────────
@@ -103,10 +175,40 @@ def normalize_client_type(client_type: str | None) -> str:
     return "new_user"
 
 
-def get_menu_options(client_type: str | None) -> list[dict[str, str]]:
-    """Return the menu items list for the given (normalised) client type."""
+def get_menu_options(
+    client_type: str | None,
+    menu_id: str | None = MAIN_MENU_ID,
+) -> list[dict[str, str]]:
+    """Return the options for one of a segment's menus.
+
+    Unknown or cross-segment ``menu_id`` values fall back to the segment's main
+    menu, so a stale session can never leave a customer without a menu.
+    """
     normalized = normalize_client_type(client_type)
-    return SEGMENT_MENU_OPTIONS.get(normalized, SEGMENT_MENU_OPTIONS["new_user"])
+    menus = SEGMENT_MENU_OPTIONS.get(normalized, SEGMENT_MENU_OPTIONS["new_user"])
+    return menus.get(menu_id or MAIN_MENU_ID) or menus[MAIN_MENU_ID]
+
+
+def get_follow_up_menu(
+    client_type: str | None,
+    intent: str,
+    current_menu_id: str | None = MAIN_MENU_ID,
+) -> str | None:
+    """Return the nested menu an *intent* reveals, or ``None`` if it has none.
+
+    ``current_menu_id`` is compared against the target so an action that also
+    appears inside its own nested menu (for example ``new_order``) runs its flow
+    instead of reopening the same menu forever.
+    """
+    target = SUBMENU_INTENTS.get((normalize_client_type(client_type), intent))
+    if not target or target == (current_menu_id or MAIN_MENU_ID):
+        return None
+    return target
+
+
+def is_menu_only_action(client_type: str | None, intent: str) -> bool:
+    """Return whether *intent* only opens a nested menu, with no response of its own."""
+    return (normalize_client_type(client_type), intent) in MENU_ONLY_ACTIONS
 
 
 # ──────────────────────────────────────────────
@@ -149,9 +251,9 @@ def format_menu_message_with_greeting(
         ])
     else:
         lines.extend([
-            "👋 *Welcome to Tailorsin!*",
+            "👋 *Welcome to Tailorsin.com!*",
             "",
-            "Professional tailoring with convenient pickup and delivery.",
+            "We offer premium bespoke tailoring and embroidery services for Men, Women, Kids, and Bridal wear. We collect your fabric, custom stitch it to your design, and deliver it to your doorstep—starting from just 24 hours after confirmation.",
             "",
         ])
 
@@ -166,15 +268,18 @@ def format_menu_message_with_greeting(
 #  Keyboard layouts (Telegram inline buttons)
 # ──────────────────────────────────────────────
 
-def get_menu_inline_keyboard(client_type: str | None) -> list[list[dict[str, str]]]:
+def get_menu_inline_keyboard(
+    client_type: str | None,
+    menu_id: str | None = MAIN_MENU_ID,
+) -> list[list[dict[str, str]]]:
     """
-    Return an inline keyboard layout (2 columns) for the given client segment.
+    Return an inline keyboard layout (2 columns) for the given menu.
     Each button sends its intent as callback_data.
     """
-    menu = get_menu_options(client_type)
+    menu = get_menu_options(client_type, menu_id)
     keyboard: list[list[dict[str, str]]] = []
 
-    # Group main options in pairs (2 columns)
+    # Group options in pairs (2 columns)
     items = list(menu)
     for i in range(0, len(items), 2):
         row: list[dict[str, str]] = []
@@ -191,12 +296,15 @@ def get_menu_inline_keyboard(client_type: str | None) -> list[list[dict[str, str
     return keyboard
 
 
-def get_menu_reply_keyboard(client_type: str | None) -> list[list[dict[str, str]]]:
+def get_menu_reply_keyboard(
+    client_type: str | None,
+    menu_id: str | None = MAIN_MENU_ID,
+) -> list[list[dict[str, str]]]:
     """
     Return a reply keyboard layout (2 columns) for platforms that don't
     support inline buttons (e.g. WATI/WhatsApp).
     """
-    menu = get_menu_options(client_type)
+    menu = get_menu_options(client_type, menu_id)
     keyboard: list[list[dict[str, str]]] = []
 
     items = list(menu)
