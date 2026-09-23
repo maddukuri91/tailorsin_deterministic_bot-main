@@ -3,7 +3,13 @@ import asyncio
 import pytest
 
 import services.conversation_service as svc
-from conversation.menu import MAIN_MENU_ID, _icon, get_menu_options
+from conversation.menu import (
+    MAIN_MENU_ID,
+    _icon,
+    _item_icon,
+    get_menu_inline_keyboard,
+    get_menu_options,
+)
 from conversation.session import get_session, reset_session, save_session
 from services.conversation_service import IncomingMessage
 
@@ -86,7 +92,7 @@ def menu_labels(outgoing):
 def expected_labels(client_type, menu_id):
     """Return the labels the menu definition says should be visible."""
     labels = [
-        f"{_icon(option['intent'])} {option['label']}"
+        f"{_item_icon(option)} {option['label']}"
         for option in get_menu_options(client_type, menu_id)
     ]
     # Nested menus carry a back button that is not part of the menu data.
@@ -767,3 +773,20 @@ def test_signup_no_path_prompts_for_the_secondary_number(monkeypatch):
 
     run(make_message("9876543210"))
     assert captured["registration"] == ("Jane Doe", "9988776655", "9876543210")
+
+
+def test_schedule_pickup_option_uses_rider_icon_while_new_order_keeps_plus():
+    """Only "Schedule Pick-up" overrides its shared new_order intent icon."""
+    schedule_texts = [
+        button["text"]
+        for row in get_menu_inline_keyboard("client", "client_orders")
+        for button in row
+    ]
+    assert "🛵 Schedule Pick-up" in schedule_texts
+
+    main_texts = [
+        button["text"]
+        for row in get_menu_inline_keyboard("client")
+        for button in row
+    ]
+    assert "➕ New Order" in main_texts

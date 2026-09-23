@@ -97,10 +97,10 @@ def _all_menu_options(menu: list[dict[str, str]]) -> list[dict[str, str]]:
     return unique
 
 
-def _label_variants(label: str, intent: str) -> set[str]:
+def _label_variants(label: str, intent: str, icon: str | None = None) -> set[str]:
     """Labels accepted from Telegram and WATI interactive controls."""
     plain = _strip_emoji(label)
-    rendered_label = f"{_icon(intent)} {label}"
+    rendered_label = f"{icon or _icon(intent)} {label}"
     return {
         label.casefold(),
         # WATI applies its 20/24-character limits before the provider sends
@@ -126,7 +126,7 @@ def _find_intent(options: list[dict[str, str]], value: str) -> str | None:
     raw_candidate = value.strip().casefold()
     candidate = _strip_emoji(value).strip().casefold()
     for item in options:
-        variants = _label_variants(item["label"], item["intent"])
+        variants = _label_variants(item["label"], item["intent"], item.get("icon"))
         if (
             candidate == item["intent"].casefold()
             or candidate in variants
