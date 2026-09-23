@@ -54,54 +54,57 @@ def _icon(intent: str) -> str:
 MAIN_MENU_ID = "main"
 
 NEW_USER_MENU = [
-    {"label": "How this Works", "intent": "about"},
-    {"label": "Price Catalogue", "intent": "pricing"},
-    {"label": "Signup",          "intent": "register"},
+    {"label": "How the process Works",   "intent": "about"},
+    {"label": "Price Catalogue",         "intent": "pricing"},
+    {"label": "Place an Order",          "intent": "register"},
 ]
 
-# Revealed beneath the "How this Works" overview.
+# Revealed beneath the "How the process Works" overview.
 NEW_USER_ABOUT_MENU = [
-    {"label": "Price Catalogue", "intent": "pricing"},
-    {"label": "Signup",          "intent": "register"},
+    {"label": "Price Catalogue",         "intent": "pricing"},
+    {"label": "Place an Order",          "intent": "register"},
 ]
 
 # Revealed beneath the "Price Catalogue" pricing details.
 NEW_USER_PRICING_MENU = [
-    {"label": "Price Estimate", "intent": "fabric_estimate"},
-    {"label": "Book Visit",     "intent": "book_visit"},
+    {"label": "Custom fabric Estimate",          "intent": "fabric_estimate"},
+    {"label": "Bulk Order Enquiry",              "intent": "bulk_order_enquiry"},
+    {"label": "Place an Order",                  "intent": "register"},
 ]
 
 CLIENT_MENU = [
-    {"label": "New Order",       "intent": "new_order"},
-    {"label": "Book Visit",      "intent": "book_visit"},
-    {"label": "Price Catalogue", "intent": "pricing"},
-    {"label": "Price Estimate",  "intent": "fabric_estimate"},
-    {"label": "Update Address",  "intent": "address_update"},
-    {"label": "Human Support",   "intent": "handover"},
+    {"label": "New Order",                   "intent": "new_order"},
+    {"label": "Book Visit",                  "intent": "book_visit"},
+    {"label": "Price Catalogue",             "intent": "pricing"},
+    {"label": "Custom fabric Estimate",      "intent": "fabric_estimate"},
+    {"label": "Bulk Order Enquiry",          "intent": "bulk_order_enquiry"},
+    {"label": "Update Address",              "intent": "address_update"},
+    {"label": "Human Support",               "intent": "handover"},
 ]
 
 # Revealed beneath "New Order" for a customer who has ordered before.
 CLIENT_ORDERS_MENU = [
-    {"label": "New Order",   "intent": "new_order"},
-    {"label": "Drop Fabric", "intent": "fabric_delivery"},
-    {"label": "Book Visit",  "intent": "book_visit"},
+    {"label": "New Order",                  "intent": "new_order"},
+    {"label": "Drop Fabric",                "intent": "fabric_delivery"},
+    {"label": "Book Visit",                 "intent": "book_visit"},
 ]
 
 ACTIVE_CLIENT_MENU = [
-    {"label": "Manage Orders",   "intent": "manage_orders"},
-    {"label": "Book Visit",      "intent": "book_visit"},
-    {"label": "Price Catalogue", "intent": "pricing"},
-    {"label": "Price Estimate",  "intent": "fabric_estimate"},
-    {"label": "Update Address",  "intent": "address_update"},
-    {"label": "Human Support",   "intent": "handover"},
+    {"label": "Manage Orders",              "intent": "manage_orders"},
+    {"label": "Book Visit",                 "intent": "book_visit"},
+    {"label": "Price Catalogue",            "intent": "pricing"},
+    {"label": "Custom fabric Estimate",     "intent": "fabric_estimate"},
+    {"label": "Bulk Order Enquiry",         "intent": "bulk_order_enquiry"},
+    {"label": "Update Address",             "intent": "address_update"},
+    {"label": "Human Support",              "intent": "handover"},
 ]
 
 # Revealed beneath "Manage Orders" for a customer with active orders.
 ACTIVE_CLIENT_ORDERS_MENU = [
-    {"label": "Track Order",  "intent": "order_status"},
-    {"label": "Modify Order", "intent": "order_changes"},
-    {"label": "Cancel Order", "intent": "order_cancel"},
-    {"label": "Report Issue", "intent": "alteration_pickup_recent"},
+    {"label": "Track Order",                "intent": "order_status"},
+    {"label": "Modify Order",               "intent": "order_changes"},
+    {"label": "Cancel Order",               "intent": "order_cancel"},
+    {"label": "Request Alteration",         "intent": "alteration_pickup_recent"},
 ]
 
 # client segment -> menu id -> ordered options

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from services.http_client import http_post
+from services.http_client import http_get
 
 
 BASE_URL = "https://crm.tailorsin.com/tailorsin-api/api/modifyorder.php"
@@ -29,21 +29,25 @@ async def modify_order(
     mobile: str,
     comment: str,
     order_id: int,
-    chatby: str = "AI Assistant",
 ) -> ModifyOrderResult:
+    """
+    Modify an existing order.
+
+    Uses a GET request with mobile, order_id and comment sent as the
+    query string, matching the CRM contract.
+    """
     cleaned_comment = comment.strip()
     if len(cleaned_comment) > MAX_COMMENT_LENGTH:
         cleaned_comment = cleaned_comment[:MAX_COMMENT_LENGTH].rstrip()
 
-    payload: dict[str, object] = {
+    params: dict[str, object] = {
         "mobile": mobile,
         "comment": cleaned_comment,
         "order_id": order_id,
-        "chatby": chatby,
     }
 
     try:
-        response = await http_post(BASE_URL, json_body=payload)
+        response = await http_get(BASE_URL, params=params)
         data = response.json() if response.content else {}
     except Exception:
         return ModifyOrderResult(

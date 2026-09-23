@@ -41,7 +41,7 @@ class Settings:
     app_env = os.getenv("APP_ENV", "development").strip().lower()
     production_mode = app_env in {"production", "prod"}
     redis_url = os.getenv("REDIS_URL", "")
-    http_timeout = _as_positive_float("HTTP_TIMEOUT", 20.0)
+    http_timeout = _as_positive_float("HTTP_TIMEOUT", 30.0)
     session_timeout_seconds = _as_positive_int("SESSION_TIMEOUT_SECONDS", 600)
     idempotency_ttl_seconds = _as_positive_int("IDEMPOTENCY_TTL_SECONDS", 86400)
     require_redis = _as_bool("REQUIRE_REDIS", production_mode)

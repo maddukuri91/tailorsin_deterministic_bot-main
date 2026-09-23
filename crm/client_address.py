@@ -3,7 +3,8 @@ from dataclasses import dataclass
 from services.http_client import http_get, http_post
 
 
-BASE_URL = "https://crm.tailorsin.com/tailorsin-api/api/clientaddress.php"
+BASE_URL = "https://crm.tailorsin.com/tailorsin-api/api/customeraddress.php"
+ADD_BASE_URL = "https://crm.tailorsin.com/tailorsin-api/api/addaddress.php"
 
 
 @dataclass
@@ -120,27 +121,29 @@ async def fetch_client_addresses(mobile: str) -> AddressListResult:
 
 async def add_client_address(
     mobile: str,
-    address1: str,
+    address: str,
     city: str,
     pincode: str,
-    lat: float | None = None,
-    lng: float | None = None,
+    address2: str | None = None,
+    locality: str | None = None,
 ) -> AddressUpsertResult:
+    """
+    Add a new address for a client via addaddress.php.
+
+    Note: the new API contract does not accept latitude/longitude, so any
+    coordinates collected by the chat flow are no longer forwarded.
+    """
     payload: dict[str, object] = {
         "mobile": mobile,
-        "action": "add",
-        "address1": address1.strip(),
+        "address": address.strip(),
+        "address2": address2,
+        "locality": locality,
         "city": city.strip(),
         "pincode": pincode.strip(),
     }
 
-    if lat is not None:
-        payload["lat"] = lat
-    if lng is not None:
-        payload["lng"] = lng
-
     try:
-        response = await http_post(BASE_URL, json_body=payload)
+        response = await http_post(ADD_BASE_URL, json_body=payload)
         data = response.json() if response.content else {}
     except Exception:
         return AddressUpsertResult(
@@ -161,6 +164,7 @@ async def add_client_address(
     )
 
 
+UPDATE_BASE_URL = "https://crm.tailorsin.com/tailorsin-api/api/clientaddress.php"
 DELETE_BASE_URL = "https://crm.tailorsin.com/tailorsin-api/api/deleteaddress.php"
 
 
@@ -212,7 +216,7 @@ async def update_client_address(
         payload["set_main"] = 1
 
     try:
-        response = await http_post(BASE_URL, json_body=payload)
+        response = await http_post(UPDATE_BASE_URL, json_body=payload)
         data = response.json() if response.content else {}
     except Exception:
         return AddressUpsertResult(

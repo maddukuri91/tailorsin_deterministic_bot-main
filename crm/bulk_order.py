@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from services.http_client import http_post
 
 
-BASE_URL = "https://crm.tailorsin.com/tailorsin-api/api/bulkorder.php"
+BASE_URL = "https://crm.tailorsin.com/tailorsin-api/api/bulkorderenquiry.php"
 
 
 @dataclass
@@ -13,8 +13,19 @@ class BulkOrderResult:
 	enquiry_id: int | None = None
 
 
-async def create_bulk_order_enquiry(mobile: str) -> BulkOrderResult:
-	payload = {"mobile": mobile}
+async def create_bulk_order_enquiry(
+	client_name: str,
+	primary_no: str,
+	secondary_no: str | None = None,
+) -> BulkOrderResult:
+	"""
+	Submit a bulk order enquiry via bulkorderenquiry.php.
+	"""
+	payload = {
+		"client_name": client_name,
+		"primary_no": primary_no,
+		"secondary_no": secondary_no,
+	}
 
 	try:
 		response = await http_post(BASE_URL, json_body=payload)

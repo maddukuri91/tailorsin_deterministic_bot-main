@@ -3,7 +3,7 @@ import logging
 
 from services.http_client import http_get
 
-BASE_URL = "https://crm.tailorsin.com/tailorsin-api/api/getclient"
+BASE_URL = "https://crm.tailorsin.com/tailorsin-api/api/getclient.php"
 logger = logging.getLogger(__name__)
 
 

@@ -4,7 +4,7 @@ import logging
 from services.http_client import http_post
 
 
-BASE_URL = "https://crm.tailorsin.com/tailorsin-api/api/addclient.php"
+BASE_URL = "https://crm.tailorsin.com/tailorsin-api/api/clientregistration.php"
 logger = logging.getLogger(__name__)
 
 
@@ -21,21 +21,28 @@ def _mask_mobile(mobile: str) -> str:
 	return f"***{digits_only[-4:]}"
 
 
-async def register_new_client(mobile: str, name: str | None = None, email: str | None = None) -> RegistrationResult:
+async def register_new_client(
+	client_name: str,
+	primary_no: str,
+	secondary_no: str | None = None,
+) -> RegistrationResult:
+	"""
+	Register a new client via clientregistration.php.
+	"""
 	try:
-		payload = {"mobile": mobile}
-		if name:
-			payload["cname"] = name
-		if email:
-			payload["email"] = email
+		payload = {
+			"client_name": client_name,
+			"primary_no": primary_no,
+			"secondary_no": secondary_no,
+		}
 
 		response = await http_post(BASE_URL, json_body=payload)
 		data = response.json()
 
 		logger.info(
 			"register_new_client request mobile=%s has_name=%s status_code=%s",
-			_mask_mobile(mobile),
-			bool(name),
+			_mask_mobile(primary_no),
+			bool(client_name),
 			response.status_code,
 		)
 
@@ -60,8 +67,8 @@ async def register_new_client(mobile: str, name: str | None = None, email: str |
 	except Exception:
 		logger.exception(
 			"register_new_client exception mobile=%s has_name=%s",
-			_mask_mobile(mobile),
-			bool(name),
+			_mask_mobile(primary_no),
+			bool(client_name),
 		)
 		return RegistrationResult(
 			success=False,

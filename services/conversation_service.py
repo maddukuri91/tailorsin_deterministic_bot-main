@@ -42,7 +42,7 @@ from crm.client_address import (
 from crm.client_type import lookup_customer_profile
 from crm.cancel_order import cancel_current_order
 from crm.fabric_delivery import create_fabric_delivery_request
-from crm.fabric_alert import raise_fabric_alert
+from crm.custom_fabric_estimation import custom_fabric_estimation
 from crm.bulk_order import create_bulk_order_enquiry
 from crm.delivered_orders import fetch_delivered_orders
 from crm.human_handover import request_human_handover
@@ -726,7 +726,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
         existing_session.awaiting_registration_email = False
         existing_session.pending_registration_name = None
 
-        registration_result = await register_new_client(mobile_for_registration, registration_name, email=registration_email)
+        registration_result = await register_new_client(client_name=registration_name, primary_no=mobile_for_registration)
 
         logger.info(
             "registration_attempt user_id=%s mobile_present=%s has_email=%s success=%s",
@@ -1355,7 +1355,6 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
 
             add_result = await add_client_address(
                 mobile_for_address, address_line, city, pincode,
-                lat=lat_lng[0], lng=lat_lng[1],
             )
         else:
             normalized_text = (message.text or "").strip().casefold()
@@ -1417,8 +1416,6 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
 
                 add_result = await add_client_address(
                     mobile_for_address, address_line, city, pincode,
-                    lat=lat_lng[0] if lat_lng else None,
-                    lng=lat_lng[1] if lat_lng else None,
                 )
 
                 if lat_lng:
@@ -1604,7 +1601,6 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
 
         add_result = await add_client_address(
             mobile_for_address, address_line, city, pincode,
-            lat=lat, lng=lng,
         )
 
         # If this address was added as part of the pickup flow, continue the pickup
@@ -1773,7 +1769,6 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
             mobile=mobile_for_change,
             comment=details,
             order_id=order_id,
-            chatby="AI Assistant",
         )
         return [
             OutgoingMessage(
@@ -2117,7 +2112,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
                     )
                 ]
 
-            fabric_result = await raise_fabric_alert(mobile_for_fabric)
+            fabric_result = await custom_fabric_estimation(client_name=customer_salutation or "", primary_no=mobile_for_fabric)
             handover_result = await request_human_handover(mobile_for_fabric)
 
             if fabric_result.success and handover_result.success:
@@ -2145,7 +2140,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
                     )
                 ]
 
-            bulk_result = await create_bulk_order_enquiry(mobile_for_bulk)
+            bulk_result = await create_bulk_order_enquiry(client_name=customer_salutation or "", primary_no=mobile_for_bulk)
             handover_result = await request_human_handover(mobile_for_bulk)
 
             if bulk_result.success and handover_result.success:
