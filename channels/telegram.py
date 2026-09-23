@@ -177,11 +177,15 @@ async def send_telegram_message(chat_id: int, message: OutgoingMessage) -> None:
 async def process_telegram_update(update: dict[str, Any]) -> dict[str, bool]:
     # First try to parse as a callback query (inline button tap)
     incoming_message = parse_callback_query_update(update)
-    callback_query_id = None
     if incoming_message:
-        # Extract callback_query_id from metadata to answer it later
+        # Acknowledge the tap immediately so Telegram clears the button's
+        # loading state even when handling is slow or fails. Answering after
+        # processing can exceed Telegram's callback window (the handler may
+        # wait on CRM HTTP calls first), which looks like a dead button.
         metadata = incoming_message.metadata or {}
         callback_query_id = metadata.get("callback_query_id")
+        if callback_query_id:
+            await answer_callback_query(callback_query_id)
     else:
         # Fall back to regular message parsing
         incoming_message = parse_telegram_update(update)
@@ -199,10 +203,6 @@ async def process_telegram_update(update: dict[str, Any]) -> dict[str, bool]:
     except Exception:
         await release_event("telegram", event_id)
         raise
-
-    # Answer the callback query first (removes loading state on button)
-    if callback_query_id:
-        await answer_callback_query(callback_query_id)
 
     for outgoing_message in outgoing_messages:
         try:

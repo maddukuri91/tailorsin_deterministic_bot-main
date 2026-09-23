@@ -47,6 +47,7 @@ _NAVIGATION_OPTIONS = (
     {"label": "Chat with agent", "intent": "handover"},
     {"label": "Chat with a human agent", "intent": "handover"},
     {"label": "Talk to an agent", "intent": "handover"},
+    {"label": "← Back to main menu", "intent": "main_menu"},
     {"label": "Go back to main menu", "intent": "main_menu"},
     {"label": "Main menu", "intent": "main_menu"},
 )

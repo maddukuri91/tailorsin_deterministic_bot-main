@@ -85,8 +85,8 @@ CLIENT_MENU = [
 
 # Revealed beneath "New Order" for a customer who has ordered before.
 CLIENT_ORDERS_MENU = [
-    {"label": "New Order",                  "intent": "new_order"},
-    {"label": "Drop Fabric",                "intent": "fabric_delivery"},
+    {"label": "Schedule Pick-up",           "intent": "new_order"},
+    {"label": "Send Fabric",                "intent": "fabric_delivery"},
     {"label": "Book Visit",                 "intent": "book_visit"},
 ]
 
@@ -271,6 +271,29 @@ def format_menu_message_with_greeting(
 #  Keyboard layouts (Telegram inline buttons)
 # ──────────────────────────────────────────────
 
+# Shown beneath every nested menu so the customer can step back to the menu it
+# was opened from. All nested menus open from their segment's main menu.
+BACK_TO_MAIN_MENU_LABEL = "← Back to main menu"
+
+
+def _back_button_label() -> str:
+    return f"{_icon('main_menu')} {BACK_TO_MAIN_MENU_LABEL}"
+
+
+def _is_nested_menu(client_type: str | None, menu_id: str | None) -> bool:
+    """Whether *menu_id* is a real nested menu for this segment.
+
+    Unknown or cross-segment ids fall back to the segment's main menu (see
+    ``get_menu_options``), and a main menu never offers a way back to itself.
+    """
+    menus = SEGMENT_MENU_OPTIONS.get(
+        normalize_client_type(client_type),
+        SEGMENT_MENU_OPTIONS["new_user"],
+    )
+    resolved = menu_id or MAIN_MENU_ID
+    return resolved in menus and resolved != MAIN_MENU_ID
+
+
 def get_menu_inline_keyboard(
     client_type: str | None,
     menu_id: str | None = MAIN_MENU_ID,
@@ -296,6 +319,13 @@ def get_menu_inline_keyboard(
                 })
         keyboard.append(row)
 
+    # Nested menus open from the segment's main menu, so they always carry a
+    # button back to it.
+    if _is_nested_menu(client_type, menu_id):
+        keyboard.append([
+            {"text": _back_button_label(), "callback_data": "menu_main_menu"},
+        ])
+
     return keyboard
 
 
@@ -319,6 +349,10 @@ def get_menu_reply_keyboard(
                 icon = _icon(item["intent"])
                 row.append({"text": f"{icon} {item['label']}"})
         keyboard.append(row)
+
+    # Same back button for reply keyboards (WATI/WhatsApp and Twilio).
+    if _is_nested_menu(client_type, menu_id):
+        keyboard.append([{"text": _back_button_label()}])
 
     return keyboard
 

@@ -88,11 +88,6 @@ TAILORSIN_OVERVIEW = (
 5. *Free Alterations*
 • Free fitting alterations are available within 7 days of delivery.
 
-
-*Price List, Terms & Conditions*
-
-https://drive.google.com/file/d/1s67qOzn2n22lN670ir0Le462FcgGyCGL/view?usp=sharing
-
 """
 )
 
@@ -572,6 +567,12 @@ async def _complete_enquiry_flow(
     signup registers the client and returns to the client menu; new customers
     in an enquiry flow are registered before the enquiry is submitted so the
     CRM (and the human handover that follows) can match them.
+
+    An enquiry answers with exactly one confirmation: the registration and
+    handover acknowledgements repeat its "we will get in touch" promise, so
+    they are logged instead of sent. The reply carries the main menu of the
+    segment the enquiry was started from, so every customer segment gets its
+    own menu back.
     """
     enquiry_intent = existing_session.pending_enquiry_intent
     enquiry_name = (existing_session.pending_enquiry_name or "").strip()
@@ -633,7 +634,13 @@ async def _complete_enquiry_flow(
 
     replies: list[str] = []
 
-    if normalize_client_type(client_type) == "new_user":
+    # The menu returned after an enquiry must match the segment it was started
+    # from. Registering a new customer in the CRM (so the enquiry and the human
+    # handover can match them) must not promote them to the client menu inside
+    # this conversation: each segment gets its own menu back.
+    segment = normalize_client_type(client_type)
+
+    if segment == "new_user":
         registration_result = await register_new_client(
             client_name=enquiry_name,
             primary_no=primary_no,
@@ -647,13 +654,15 @@ async def _complete_enquiry_flow(
         )
         if registration_result.success:
             profile = await lookup_customer_profile(primary_no)
-            client_type = profile.client_type
             await save_client_profile(
                 message.user_id,
                 primary_no,
-                profile.client_type,
+                segment,
                 profile.customer_salutation,
             )
+        else:
+            # A successful registration is an internal step: surfacing it would
+            # only repeat the single confirmation below. Failures are shown.
             replies.append(registration_result.message)
 
     if enquiry_intent == "fabric_estimate":
@@ -675,18 +684,27 @@ async def _complete_enquiry_flow(
         enquiry_intent,
         enquiry_result.success,
     )
+    # The one confirmation the customer receives for the enquiry.
     replies.append(enquiry_result.message)
 
-    # A failed handover (for example a CRM lookup miss) should not bury the
-    # enquiry confirmation, so only surface it when it succeeds.
+    # The handover still runs so a human agent is assigned in the CRM, but its
+    # acknowledgement repeats the "we will get in touch" promise above, so it
+    # is logged instead of sent.
     handover_result = await request_human_handover(primary_no)
-    if handover_result.success:
-        replies.append(handover_result.message)
+    logger.info(
+        "enquiry_handover user_id=%s intent=%s success=%s",
+        message.user_id,
+        enquiry_intent,
+        handover_result.success,
+    )
+
+    # This response shows a main menu, so release any nested-menu cursor.
+    existing_session.current_menu = MAIN_MENU_ID
 
     return [
         OutgoingMessage(
             text="\n".join(replies),
-            reply_markup=build_menu_reply_markup(client_type),
+            reply_markup=build_menu_reply_markup(segment),
         )
     ]
 
@@ -802,7 +820,12 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
                     )
                 ]
             handover_result = await request_human_handover(mobile_for_handover)
-            return [OutgoingMessage(text=handover_result.message)]
+            return [
+                OutgoingMessage(
+                    text=handover_result.message,
+                    reply_markup=build_nav_keyboard(),
+                )
+            ]
     # --- End early navigation interceptor ---
 
     # Telegram callbacks and WATI interactive replies are explicit menu taps.
@@ -834,7 +857,12 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
     if existing_session.awaiting_registration_name:
         registration_name = (message.text or "").strip()
         if len(registration_name) < 2:
-            return [OutgoingMessage(text="Please enter a valid full name for registration.")]
+            return [
+                OutgoingMessage(
+                    text="Please enter a valid full name for registration.",
+                    reply_markup=build_nav_keyboard(),
+                )
+            ]
 
         mobile_for_registration = derive_mobile_from_message(message, existing_mobile)
         if not mobile_for_registration:
@@ -842,6 +870,7 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
             return [
                 OutgoingMessage(
                     text="I could not detect your mobile number automatically for this session, so registration could not be completed.",
+                    reply_markup=build_nav_keyboard(),
                 )
             ]
 

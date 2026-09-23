@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 import services.conversation_service as svc
-from conversation.menu import _icon, get_menu_options
+from conversation.menu import MAIN_MENU_ID, _icon, get_menu_options
 from conversation.session import get_session, reset_session, save_session
 from services.conversation_service import IncomingMessage
 
@@ -85,10 +85,14 @@ def menu_labels(outgoing):
 
 def expected_labels(client_type, menu_id):
     """Return the labels the menu definition says should be visible."""
-    return [
+    labels = [
         f"{_icon(option['intent'])} {option['label']}"
         for option in get_menu_options(client_type, menu_id)
     ]
+    # Nested menus carry a back button that is not part of the menu data.
+    if menu_id and menu_id != MAIN_MENU_ID:
+        labels.append(f"{_icon('main_menu')} ← Back to main menu")
+    return labels
 
 
 def current_menu_id():
@@ -453,6 +457,8 @@ def test_bulk_order_enquiry_yes_uses_the_session_number_as_secondary(monkeypatch
         return R()
 
     async def fake_handover(mobile):
+        captured["handover"] = mobile
+
         class R:
             success = True
             message = "Agent notified."
@@ -467,9 +473,14 @@ def test_bulk_order_enquiry_yes_uses_the_session_number_as_secondary(monkeypatch
     out = run(make_message("Yes"))
 
     assert captured["bulk"] == ("Test User", "9988776655", "9988776655")
-    texts = " ".join(o.text for o in out)
-    assert "submitted" in texts
-    assert "Agent notified" in texts
+    # The handover still runs so an agent is assigned in the CRM...
+    assert captured["handover"] == "9988776655"
+    # ...but only the enquiry confirmation is sent: the handover
+    # acknowledgement repeats it. The client segment gets its own menu back.
+    assert len(out) == 1
+    assert "submitted" in out[0].text
+    assert "Agent notified" not in out[0].text
+    assert menu_labels(out[0]) == expected_labels("client", "main")
 
 
 def test_fabric_estimate_collects_name_and_secondary_for_new_users(monkeypatch):
@@ -495,6 +506,8 @@ def test_fabric_estimate_collects_name_and_secondary_for_new_users(monkeypatch):
         return R()
 
     async def fake_handover(mobile):
+        captured["handover"] = mobile
+
         class R:
             success = True
             message = "Agent notified."
@@ -518,11 +531,17 @@ def test_fabric_estimate_collects_name_and_secondary_for_new_users(monkeypatch):
 
     out = run(make_message("9876543210"))
 
+    # Registration still runs so the CRM can match the enquiry and handover...
     assert captured["registration"] == ("John Doe", "9988776655", "9876543210")
     assert captured["fabric"] == ("John Doe", "9988776655", "9876543210")
-    texts = " ".join(o.text for o in out)
-    assert "registered successfully" in texts
-    assert "submitted" in texts
+    assert captured["handover"] == "9988776655"
+    # ...but a single confirmation is sent, and the new user keeps the new
+    # user menu instead of being promoted to the client menu.
+    assert len(out) == 1
+    assert "submitted" in out[0].text
+    assert "registered successfully" not in out[0].text
+    assert "Agent notified" not in out[0].text
+    assert menu_labels(out[0]) == expected_labels("new_user", "main")
 
 
 def test_fabric_estimate_rejects_an_invalid_secondary_and_hides_handover_errors(monkeypatch):
@@ -562,6 +581,129 @@ def test_fabric_estimate_rejects_an_invalid_secondary_and_hides_handover_errors(
     texts = " ".join(o.text for o in out)
     assert "submitted" in texts
     assert "client not found" not in texts
+    # The client segment gets the client menu back.
+    assert len(out) == 1
+    assert menu_labels(out[0]) == expected_labels("client", "main")
+
+
+def test_nested_menu_shows_a_back_button_that_returns_to_the_main_menu(monkeypatch):
+    from conversation.intent_router import get_intent
+
+    set_client_type(monkeypatch, "new_user")
+    back_label = f"{_icon('main_menu')} ← Back to main menu"
+
+    # The back label resolves to the main menu intent on every channel: as a
+    # reply-keyboard tap (WATI/Twilio) and as callback data (Telegram).
+    assert get_intent("new_user", back_label) == "main_menu"
+    assert get_intent("client", "main_menu") == "main_menu"
+
+    run(make_message("/start", contact_phone="9988776655"))
+    out = run(make_message("2"))  # Price Catalogue -> nested menu
+
+    assert back_label in menu_labels(out[0])
+    assert current_menu_id() == "new_user_pricing"
+
+    out = run(make_message(back_label))
+    assert menu_labels(out[0]) == expected_labels("new_user", "main")
+    assert current_menu_id() == "main"
+
+    # A Telegram inline tap arrives as the stripped callback payload.
+    run(make_message("2"))
+    out = run(make_message("main_menu", metadata={"platform": "telegram"}))
+    assert menu_labels(out[0]) == expected_labels("new_user", "main")
+    assert current_menu_id() == "main"
+
+
+def test_new_user_enquiry_sends_one_confirmation_and_returns_the_new_user_menu(monkeypatch):
+    """Registration and handover acknowledgements must not stack up, and the
+    new user must get the new user menu back rather than the client menu."""
+    set_client_type(monkeypatch, "new_user", salutation=None)
+    captured = {}
+
+    async def fake_register(client_name, primary_no, secondary_no=None):
+        captured["registration"] = (client_name, primary_no, secondary_no)
+
+        class R:
+            success = True
+            message = "client registered successfully"
+
+        return R()
+
+    async def fake_fabric(client_name, primary_no, secondary_no=None):
+        captured["fabric"] = (client_name, primary_no, secondary_no)
+
+        class R:
+            success = True
+            message = (
+                "thanks! your custom fabric estimation request has been received, "
+                "our team will get in touch with you shortly"
+            )
+
+        return R()
+
+    async def fake_handover(mobile):
+        captured["handover"] = mobile
+
+        class R:
+            success = True
+            message = "handed over to human agent"
+
+        return R()
+
+    monkeypatch.setattr(svc, "register_new_client", fake_register)
+    monkeypatch.setattr(svc, "custom_fabric_estimation", fake_fabric)
+    monkeypatch.setattr(svc, "request_human_handover", fake_handover)
+
+    run(make_message("/start", contact_phone="9988776655"))
+    run(make_message("fabric_estimate"))
+    run(make_message("John Doe"))
+    run(make_message("No"))
+    out = run(make_message("9876543210"))
+
+    assert captured["registration"] == ("John Doe", "9988776655", "9876543210")
+    assert captured["fabric"] == ("John Doe", "9988776655", "9876543210")
+    assert captured["handover"] == "9988776655"
+
+    assert len(out) == 1
+    assert "received" in out[0].text
+    assert "registered successfully" not in out[0].text
+    assert "handed over" not in out[0].text
+    assert menu_labels(out[0]) == expected_labels("new_user", "main")
+    assert current_menu_id() == "main"
+
+
+def test_active_client_enquiry_confirmation_returns_the_active_client_menu(monkeypatch):
+    set_client_type(monkeypatch, "active_client")
+    captured = {}
+
+    async def fake_fabric(client_name, primary_no, secondary_no=None):
+        class R:
+            success = True
+            message = "Fabric estimation request has been submitted."
+
+        return R()
+
+    async def fake_handover(mobile):
+        captured["handover"] = mobile
+
+        class R:
+            success = True
+            message = "handed over to human agent"
+
+        return R()
+
+    monkeypatch.setattr(svc, "custom_fabric_estimation", fake_fabric)
+    monkeypatch.setattr(svc, "request_human_handover", fake_handover)
+
+    run(make_message("/start", contact_phone="9988776655"))
+    run(make_message("fabric_estimate"))  # salutation known -> contact prompt
+    out = run(make_message("Yes"))
+
+    assert captured["handover"] == "9988776655"
+    assert len(out) == 1
+    assert "submitted" in out[0].text
+    assert "handed over" not in out[0].text
+    assert menu_labels(out[0]) == expected_labels("active_client", "main")
 
 
 def test_signup_asks_for_secondary_number_instead_of_email(monkeypatch):
