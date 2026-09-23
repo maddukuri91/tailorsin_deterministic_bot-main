@@ -45,16 +45,6 @@ def _icon(intent: str) -> str:
     return _OPTION_ICONS.get(intent, "•")
 
 
-def _item_icon(item: dict[str, str]) -> str:
-    """Icon for one menu option.
-
-    An item may declare an explicit ``icon`` to override its intent's default,
-    so "Schedule Pick-up" can show 🛵 while "New Order" keeps ➕ even though
-    both share the ``new_order`` intent.
-    """
-    return item.get("icon") or _icon(item["intent"])
-
-
 # ──────────────────────────────────────────────
 #  Menu definitions
 # ──────────────────────────────────────────────
@@ -95,7 +85,7 @@ CLIENT_MENU = [
 
 # Revealed beneath "New Order" for a customer who has ordered before.
 CLIENT_ORDERS_MENU = [
-    {"label": "Schedule Pick-up",           "intent": "new_order", "icon": "🛵"},
+    {"label": "Schedule Pick-up",           "intent": "new_order"},
     {"label": "Send Fabric",                "intent": "fabric_delivery"},
     {"label": "Book Visit",                 "intent": "book_visit"},
 ]
@@ -104,7 +94,7 @@ ACTIVE_CLIENT_MENU = [
     {"label": "Manage Orders",              "intent": "manage_orders"},
     {"label": "Book Visit",                 "intent": "book_visit"},
     {"label": "Price Catalogue",            "intent": "pricing"},
-    {"label": "Custom fabric Estimate",     "intent": "fabric_estimate"},
+    {"label": "Custom Fabric Estimate",     "intent": "fabric_estimate"},
     {"label": "Bulk Order Enquiry",         "intent": "bulk_order_enquiry"},
     {"label": "Update Address",             "intent": "address_update"},
     {"label": "Human Support",              "intent": "handover"},
@@ -322,7 +312,7 @@ def get_menu_inline_keyboard(
         for j in range(2):
             if i + j < len(items):
                 item = items[i + j]
-                icon = _item_icon(item)
+                icon = _icon(item["intent"])
                 row.append({
                     "text": f"{icon} {item['label']}",
                     "callback_data": f"menu_{item['intent']}",
@@ -356,7 +346,7 @@ def get_menu_reply_keyboard(
         for j in range(2):
             if i + j < len(items):
                 item = items[i + j]
-                icon = _item_icon(item)
+                icon = _icon(item["intent"])
                 row.append({"text": f"{icon} {item['label']}"})
         keyboard.append(row)
 
