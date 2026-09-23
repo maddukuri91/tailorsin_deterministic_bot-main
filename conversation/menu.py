@@ -15,6 +15,7 @@ _OPTION_ICONS: dict[str, str] = {
     "order_status": "🔍",
     "order_changes": "✏️",
     "order_cancel": "🚫",
+    "bulk_order_enquiry": "🛒",
     # Support
     "alteration_pickup_recent": "🔄",
     "handover": "💬",
@@ -229,7 +230,7 @@ def format_menu_message_with_greeting(
     is_repeat: bool = False,
 ) -> str:
     """Build a polished, emoji-rich greeting message for the given client segment.
-    
+
     Note: The menu options are shown via inline tap buttons. The text only
     contains the greeting and a prompt to tap a button.
     """
@@ -242,27 +243,26 @@ def format_menu_message_with_greeting(
         salutation = customer_salutation or "valued customer"
 
         if is_repeat:
-            lines.append("📋 *Here is the main menu again.*")
-            lines.append("")
+            lines.extend([
+                "📋 *Here is the main menu again.*",
+                "",
+            ])
 
         lines.extend([
             "👋 *Welcome back!*",
-            f"Hello {salutation}. How can we help today?",
+            f"Hello {salutation}, how can we help you today?",
             "",
-            "I can help with orders, pickups, visits, pricing, and support.",
-            "",
+            "Please tap an option below.",
         ])
     else:
         lines.extend([
-            "👋 *Welcome to Tailorsin.com!*",
+            "👋 *Welcome to Tailorsin.com — your spot for custom fits* 🧵",
             "",
-            "We offer premium bespoke tailoring and embroidery services for Men, Women, Kids, and Bridal wear. We collect your fabric, custom stitch it to your design, and deliver it to your doorstep—starting from just 24 hours after confirmation.",
+            "We pick up your fabric, stitch it, and drop it at your door — "
+            "usually within 24 hrs after you approve the design. 🚪📦",
             "",
+            "Please tap an option below to get started.",
         ])
-
-    lines.extend([
-        "Please choose an option below.",
-    ])
 
     return "\n".join(lines)
 

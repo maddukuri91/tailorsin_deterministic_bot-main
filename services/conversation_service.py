@@ -17,6 +17,7 @@ from conversation.menu import (
     get_nav_inline_keyboard,
     get_nav_reply_keyboard,
     is_menu_only_action,
+    normalize_client_type,
 )
 from conversation.session import (
     begin_session_scope,
@@ -421,10 +422,9 @@ def clear_all_flows(session: Any) -> None:
     clear_pickup_flow(session)
     clear_order_change_flow(session)
     clear_order_cancel_flow(session)
+    clear_enquiry_flow(session)
     session.awaiting_contact = False
     session.awaiting_registration_name = False
-    session.awaiting_registration_email = False
-    session.pending_registration_name = None
     session.awaiting_visit_date = False
     session.awaiting_visit_time = False
     session.awaiting_fabric_delivery_notes = False
@@ -435,6 +435,17 @@ def clear_all_flows(session: Any) -> None:
     # while a menu tap is being processed, and the cursor is still needed to
     # interpret that tap (see the intent resolution in _handle_incoming_message).
     # Every path that shows a main menu resets the cursor itself.
+
+
+def clear_enquiry_flow(session: Any) -> None:
+    """Clear the fabric-estimate / bulk-order enquiry capture state."""
+    session.awaiting_enquiry_name = False
+    session.awaiting_enquiry_secondary_choice = False
+    session.awaiting_enquiry_secondary_number = False
+    session.pending_enquiry_intent = None
+    session.pending_enquiry_name = None
+    session.pending_enquiry_primary_no = None
+    session.pending_enquiry_secondary_no = None
 
 
 def clear_address_update_flow(session: Any) -> None:
@@ -540,6 +551,146 @@ async def build_main_menu_response(
     return send_main_menu(client_type, customer_salutation, is_repeat)
 
 
+def _preferred_contact_prompt(primary_no: str) -> str:
+    """Ask whether the session (WhatsApp/Telegram) number doubles as secondary."""
+    return (
+        f"Is your preferred contact number the same as *{primary_no}*?\n\n"
+        f"Reply *Yes* to use {primary_no} as your secondary number, "
+        "or reply *No* to enter a different number."
+    )
+
+
+async def _complete_enquiry_flow(
+    message: IncomingMessage,
+    existing_session: Any,
+    existing_client_type: str | None,
+) -> list[OutgoingMessage]:
+    """Finish a signup or fabric-estimate / bulk-order enquiry once all details are known.
+
+    The CRM endpoints require client_name, primary_no and secondary_no, so every
+    flow collects the customer's name and preferred contact number first. A
+    signup registers the client and returns to the client menu; new customers
+    in an enquiry flow are registered before the enquiry is submitted so the
+    CRM (and the human handover that follows) can match them.
+    """
+    enquiry_intent = existing_session.pending_enquiry_intent
+    enquiry_name = (existing_session.pending_enquiry_name or "").strip()
+    primary_no = existing_session.pending_enquiry_primary_no
+    secondary_no = existing_session.pending_enquiry_secondary_no
+    clear_enquiry_flow(existing_session)
+
+    client_type = existing_client_type or "new_user"
+    if not (enquiry_intent and enquiry_name and primary_no and secondary_no):
+        return [
+            OutgoingMessage(
+                text="Your enquiry details were lost. Please start again from the menu.",
+                reply_markup=build_menu_reply_markup(client_type),
+            )
+        ]
+
+    if enquiry_intent == "register":
+        # Signup completes here: register the client with the collected
+        # secondary number, then show the registered client's menu.
+        registration_result = await register_new_client(
+            client_name=enquiry_name,
+            primary_no=primary_no,
+            secondary_no=secondary_no,
+        )
+        logger.info(
+            "registration_attempt user_id=%s mobile_present=%s has_secondary=%s success=%s",
+            message.user_id,
+            bool(primary_no),
+            bool(secondary_no),
+            registration_result.success,
+        )
+        if registration_result.success:
+            profile = await lookup_customer_profile(primary_no)
+            await save_client_profile(
+                message.user_id,
+                primary_no,
+                profile.client_type,
+                profile.customer_salutation,
+            )
+            return [
+                OutgoingMessage(
+                    # The CRM already confirms the signup; the menu that
+                    # follows is the "complete" step, so don't repeat it here.
+                    text=registration_result.message,
+                ),
+                await build_main_menu_response(
+                    message.user_id,
+                    profile.client_type,
+                    profile.customer_salutation,
+                ),
+            ]
+
+        return [
+            OutgoingMessage(
+                text=registration_result.message,
+                reply_markup=build_menu_reply_markup(existing_client_type or "new_user"),
+            )
+        ]
+
+    replies: list[str] = []
+
+    if normalize_client_type(client_type) == "new_user":
+        registration_result = await register_new_client(
+            client_name=enquiry_name,
+            primary_no=primary_no,
+            secondary_no=secondary_no,
+        )
+        logger.info(
+            "enquiry_registration_attempt user_id=%s intent=%s success=%s",
+            message.user_id,
+            enquiry_intent,
+            registration_result.success,
+        )
+        if registration_result.success:
+            profile = await lookup_customer_profile(primary_no)
+            client_type = profile.client_type
+            await save_client_profile(
+                message.user_id,
+                primary_no,
+                profile.client_type,
+                profile.customer_salutation,
+            )
+            replies.append(registration_result.message)
+
+    if enquiry_intent == "fabric_estimate":
+        enquiry_result = await custom_fabric_estimation(
+            client_name=enquiry_name,
+            primary_no=primary_no,
+            secondary_no=secondary_no,
+        )
+    else:
+        enquiry_result = await create_bulk_order_enquiry(
+            client_name=enquiry_name,
+            primary_no=primary_no,
+            secondary_no=secondary_no,
+        )
+
+    logger.info(
+        "enquiry_submitted user_id=%s intent=%s success=%s",
+        message.user_id,
+        enquiry_intent,
+        enquiry_result.success,
+    )
+    replies.append(enquiry_result.message)
+
+    # A failed handover (for example a CRM lookup miss) should not bury the
+    # enquiry confirmation, so only surface it when it succeeds.
+    handover_result = await request_human_handover(primary_no)
+    if handover_result.success:
+        replies.append(handover_result.message)
+
+    return [
+        OutgoingMessage(
+            text="\n".join(replies),
+            reply_markup=build_menu_reply_markup(client_type),
+        )
+    ]
+
+
 async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMessage]:
     now = time.time()
     existing_session = await get_session(message.user_id)
@@ -625,6 +776,9 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
 
             if resolved_client == "new_user":
                 existing_session.current_menu = MAIN_MENU_ID
+                # Registration takes over from any capture flow that was in
+                # progress (fabric estimate / bulk order enquiry).
+                clear_enquiry_flow(existing_session)
                 existing_session.awaiting_registration_name = True
                 return [
                     OutgoingMessage(
@@ -691,71 +845,97 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
                 )
             ]
 
-        # Store name and proceed to ask for email
-        existing_session.pending_registration_name = registration_name
+        # Signup asks for a secondary number instead of an email, using the
+        # same preferred-contact step as the fabric-estimate and bulk-order
+        # enquiry flows. Completion happens in _complete_enquiry_flow.
+        clear_enquiry_flow(existing_session)
         existing_session.awaiting_registration_name = False
-        existing_session.awaiting_registration_email = True
+        existing_session.pending_enquiry_intent = "register"
+        existing_session.pending_enquiry_name = registration_name
+        existing_session.pending_enquiry_primary_no = mobile_for_registration
+        existing_session.awaiting_enquiry_secondary_choice = True
 
         return [
             OutgoingMessage(
-                text=with_footer(
-                    "Enter your email address (optional).\n"
-                    "Reply *Skip* if you would prefer not to add an email address."
-                ),
+                text=_preferred_contact_prompt(mobile_for_registration),
                 reply_markup=build_nav_keyboard(),
             )
         ]
 
-    if existing_session.awaiting_registration_email:
-        registration_name = existing_session.pending_registration_name
-        mobile_for_registration = derive_mobile_from_message(message, existing_mobile)
-
-        if not mobile_for_registration or not registration_name:
-            existing_session.awaiting_registration_email = False
-            existing_session.pending_registration_name = None
+    # --- Custom fabric estimate / bulk order enquiry inputs ---------------
+    # Both flows collect the details the CRM endpoints require (client_name
+    # and secondary_no) before submitting. The primary number always comes
+    # from the WhatsApp/Telegram session.
+    if existing_session.awaiting_enquiry_name:
+        enquiry_name_input = (message.text or "").strip()
+        if len(enquiry_name_input) < 2:
             return [
                 OutgoingMessage(
-                    text="Registration details were lost. Please start the registration process again from the menu.",
+                    text="Please enter a valid full name.",
+                    reply_markup=build_nav_keyboard(),
                 )
             ]
 
-        registration_email = (message.text or "").strip()
-        if registration_email.casefold() in {"skip", "no", "none", ""}:
-            registration_email = None
-
-        existing_session.awaiting_registration_email = False
-        existing_session.pending_registration_name = None
-
-        registration_result = await register_new_client(client_name=registration_name, primary_no=mobile_for_registration)
-
-        logger.info(
-            "registration_attempt user_id=%s mobile_present=%s has_email=%s success=%s",
-            message.user_id,
-            bool(mobile_for_registration),
-            bool(registration_email),
-            registration_result.success,
-        )
-
-        if registration_result.success:
-            mobile, client_type, customer_salutation = await resolve_client_type(
-                message.text,
-                message.contact_phone,
-                mobile_for_registration,
+        existing_session.pending_enquiry_name = enquiry_name_input
+        existing_session.awaiting_enquiry_name = False
+        existing_session.awaiting_enquiry_secondary_choice = True
+        return [
+            OutgoingMessage(
+                text=_preferred_contact_prompt(existing_session.pending_enquiry_primary_no or ""),
+                reply_markup=build_nav_keyboard(),
             )
-            await save_client_profile(message.user_id, mobile, client_type, customer_salutation)
+        ]
+
+    if existing_session.awaiting_enquiry_secondary_choice:
+        enquiry_reply = (message.text or "").strip().casefold().rstrip(".!")
+        primary_for_enquiry = existing_session.pending_enquiry_primary_no
+        if not primary_for_enquiry:
+            clear_enquiry_flow(existing_session)
             return [
                 OutgoingMessage(
-                    text=f"{registration_result.message}\nRegistration complete. Showing your client menu now.",
-                ),
-                await build_main_menu_response(message.user_id, client_type, customer_salutation),
+                    text="Your enquiry details were lost. Please start again from the menu.",
+                    reply_markup=build_menu_reply_markup(existing_client_type or "new_user"),
+                )
+            ]
+
+        if enquiry_reply in {"yes", "y"}:
+            # The customer confirmed their session number doubles as secondary.
+            existing_session.pending_enquiry_secondary_no = primary_for_enquiry
+            existing_session.awaiting_enquiry_secondary_choice = False
+            return await _complete_enquiry_flow(message, existing_session, existing_client_type)
+
+        if enquiry_reply in {"no", "n"}:
+            existing_session.awaiting_enquiry_secondary_choice = False
+            existing_session.awaiting_enquiry_secondary_number = True
+            return [
+                OutgoingMessage(
+                    text="Please enter your preferred 10-digit mobile number.",
+                    reply_markup=build_nav_keyboard(),
+                )
             ]
 
         return [
             OutgoingMessage(
-                text=registration_result.message,
-                reply_markup=build_menu_reply_markup(existing_client_type or "new_user"),
+                text="Please reply *Yes* or *No*.",
+                reply_markup=build_nav_keyboard(),
             )
         ]
+
+    if existing_session.awaiting_enquiry_secondary_number:
+        secondary_digits = normalize_mobile((message.text or "").strip())
+        if len(secondary_digits) not in {10, 12}:
+            return [
+                OutgoingMessage(
+                    text="Please enter a valid 10-digit mobile number (or 12 digits with country code).",
+                    reply_markup=build_nav_keyboard(),
+                )
+            ]
+
+        existing_session.pending_enquiry_secondary_no = secondary_digits
+        existing_session.awaiting_enquiry_secondary_number = False
+        return await _complete_enquiry_flow(message, existing_session, existing_client_type)
+
+    # --- End custom fabric estimate / bulk order enquiry inputs -----------
 
     if existing_session.awaiting_pickup_date:
         pickup_date = parse_pickup_date_option(message.text)
@@ -2102,59 +2282,44 @@ async def _handle_incoming_message(message: IncomingMessage) -> list[OutgoingMes
                 )
             ]
 
-        if selected_intent == "fabric_estimate":
-            mobile_for_fabric = derive_mobile_from_message(message, mobile)
-            if not mobile_for_fabric:
+        if selected_intent in {"fabric_estimate", "bulk_order_enquiry", "bulk_orders"}:
+            enquiry_kind = (
+                "fabric estimate request"
+                if selected_intent == "fabric_estimate"
+                else "bulk order enquiry"
+            )
+            mobile_for_enquiry = derive_mobile_from_message(message, mobile)
+            if not mobile_for_enquiry:
                 return [
                     OutgoingMessage(
-                        text="I could not identify your mobile number for fabric estimate request. Please share contact or send your mobile number.",
-                        reply_markup=build_menu_reply_markup(client_type),
+                        text=f"I could not identify your mobile number for the {enquiry_kind}. Please share contact or send your mobile number.",
+                        reply_markup=build_contact_keyboard(),
                     )
                 ]
 
-            fabric_result = await custom_fabric_estimation(client_name=customer_salutation or "", primary_no=mobile_for_fabric)
-            handover_result = await request_human_handover(mobile_for_fabric)
+            # The CRM endpoints require client_name and secondary_no, so start
+            # a short capture flow for anything we do not already know. The
+            # primary number comes from the WhatsApp/Telegram session.
+            clear_enquiry_flow(existing_session)
+            existing_session.pending_enquiry_intent = selected_intent
+            existing_session.pending_enquiry_primary_no = mobile_for_enquiry
 
-            if fabric_result.success and handover_result.success:
+            enquiry_known_name = (customer_salutation or "").strip()
+            if not enquiry_known_name:
+                existing_session.awaiting_enquiry_name = True
                 return [
                     OutgoingMessage(
-                        text=f"{fabric_result.message}\n{handover_result.message}",
-                        reply_markup=build_menu_reply_markup(client_type),
+                        text=with_footer("Please enter your full name to continue."),
+                        reply_markup=build_nav_keyboard(),
                     )
                 ]
 
+            existing_session.pending_enquiry_name = enquiry_known_name
+            existing_session.awaiting_enquiry_secondary_choice = True
             return [
                 OutgoingMessage(
-                    text=f"{fabric_result.message}\n{handover_result.message}",
-                    reply_markup=build_menu_reply_markup(client_type),
-                )
-            ]
-
-        if selected_intent == "bulk_orders":
-            mobile_for_bulk = derive_mobile_from_message(message, mobile)
-            if not mobile_for_bulk:
-                return [
-                    OutgoingMessage(
-                        text="I could not identify your mobile number for bulk order enquiry. Please share contact or send your mobile number.",
-                        reply_markup=build_menu_reply_markup(client_type),
-                    )
-                ]
-
-            bulk_result = await create_bulk_order_enquiry(client_name=customer_salutation or "", primary_no=mobile_for_bulk)
-            handover_result = await request_human_handover(mobile_for_bulk)
-
-            if bulk_result.success and handover_result.success:
-                return [
-                    OutgoingMessage(
-                        text=f"{bulk_result.message}\n{handover_result.message}",
-                        reply_markup=build_menu_reply_markup(client_type),
-                    )
-                ]
-
-            return [
-                OutgoingMessage(
-                    text=f"{bulk_result.message}\n{handover_result.message}",
-                    reply_markup=build_menu_reply_markup(client_type),
+                    text=_preferred_contact_prompt(mobile_for_enquiry),
+                    reply_markup=build_nav_keyboard(),
                 )
             ]
 

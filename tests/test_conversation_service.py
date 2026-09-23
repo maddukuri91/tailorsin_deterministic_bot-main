@@ -428,3 +428,200 @@ def test_visit_slot_parsing():
     assert svc.parse_visit_slot_option("1", ["9 AM", "2 PM"]) == "9 AM"
     assert svc.parse_visit_slot_option("9 AM", ["9 AM", "2 PM"]) == "9 AM"
     assert svc.parse_visit_slot_option("zzz", ["9 AM"]) is None
+
+
+def test_bulk_order_enquiry_intent_runs_the_flow_instead_of_the_fallback():
+    """Regression: the menu emits bulk_order_enquiry, the handler checked bulk_orders."""
+    run(make_message("/start", contact_phone="9988776655"))
+    out = run(make_message("bulk_order_enquiry", metadata={"is_menu_selection": True}))
+
+    assert out
+    assert not any("Selected option" in o.text for o in out)
+    assert "preferred contact" in out[0].text.lower()
+
+
+def test_bulk_order_enquiry_yes_uses_the_session_number_as_secondary(monkeypatch):
+    captured = {}
+
+    async def fake_bulk_order(client_name, primary_no, secondary_no=None):
+        captured["bulk"] = (client_name, primary_no, secondary_no)
+
+        class R:
+            success = True
+            message = "Your bulk order enquiry has been submitted."
+
+        return R()
+
+    async def fake_handover(mobile):
+        class R:
+            success = True
+            message = "Agent notified."
+
+        return R()
+
+    monkeypatch.setattr(svc, "create_bulk_order_enquiry", fake_bulk_order)
+    monkeypatch.setattr(svc, "request_human_handover", fake_handover)
+
+    run(make_message("/start", contact_phone="9988776655"))
+    run(make_message("bulk_order_enquiry"))
+    out = run(make_message("Yes"))
+
+    assert captured["bulk"] == ("Test User", "9988776655", "9988776655")
+    texts = " ".join(o.text for o in out)
+    assert "submitted" in texts
+    assert "Agent notified" in texts
+
+
+def test_fabric_estimate_collects_name_and_secondary_for_new_users(monkeypatch):
+    set_client_type(monkeypatch, "new_user", salutation=None)
+    captured = {}
+
+    async def fake_register(client_name, primary_no, secondary_no=None):
+        captured["registration"] = (client_name, primary_no, secondary_no)
+
+        class R:
+            success = True
+            message = "You are registered successfully."
+
+        return R()
+
+    async def fake_fabric(client_name, primary_no, secondary_no=None):
+        captured["fabric"] = (client_name, primary_no, secondary_no)
+
+        class R:
+            success = True
+            message = "Fabric estimation request has been submitted."
+
+        return R()
+
+    async def fake_handover(mobile):
+        class R:
+            success = True
+            message = "Agent notified."
+
+        return R()
+
+    monkeypatch.setattr(svc, "register_new_client", fake_register)
+    monkeypatch.setattr(svc, "custom_fabric_estimation", fake_fabric)
+    monkeypatch.setattr(svc, "request_human_handover", fake_handover)
+
+    run(make_message("/start", contact_phone="9988776655"))
+
+    out = run(make_message("fabric_estimate"))
+    assert "full name" in out[0].text.lower()
+
+    out = run(make_message("John Doe"))
+    assert "preferred contact" in out[0].text.lower()
+
+    out = run(make_message("No"))
+    assert "mobile number" in out[0].text.lower()
+
+    out = run(make_message("9876543210"))
+
+    assert captured["registration"] == ("John Doe", "9988776655", "9876543210")
+    assert captured["fabric"] == ("John Doe", "9988776655", "9876543210")
+    texts = " ".join(o.text for o in out)
+    assert "registered successfully" in texts
+    assert "submitted" in texts
+
+
+def test_fabric_estimate_rejects_an_invalid_secondary_and_hides_handover_errors(monkeypatch):
+    captured = {}
+
+    async def fake_fabric(client_name, primary_no, secondary_no=None):
+        captured["fabric"] = (client_name, primary_no, secondary_no)
+
+        class R:
+            success = True
+            message = "Fabric estimation request has been submitted."
+
+        return R()
+
+    async def fake_handover(mobile):
+        class R:
+            success = False
+            message = "client not found"
+
+        return R()
+
+    monkeypatch.setattr(svc, "custom_fabric_estimation", fake_fabric)
+    monkeypatch.setattr(svc, "request_human_handover", fake_handover)
+
+    run(make_message("/start", contact_phone="9988776655"))
+    run(make_message("fabric_estimate"))
+    out = run(make_message("No"))
+    assert "mobile number" in out[0].text.lower()
+
+    out = run(make_message("12345"))
+    assert "valid" in out[0].text.lower()
+    assert "fabric" not in captured
+
+    out = run(make_message("9876543210"))
+    assert captured["fabric"] == ("Test User", "9988776655", "9876543210")
+    # A failed handover must not bury the enquiry confirmation.
+    texts = " ".join(o.text for o in out)
+    assert "submitted" in texts
+    assert "client not found" not in texts
+
+
+def test_signup_asks_for_secondary_number_instead_of_email(monkeypatch):
+    set_client_type(monkeypatch, "new_user", salutation=None)
+    captured = {}
+
+    async def fake_register(client_name, primary_no, secondary_no=None):
+        captured["registration"] = (client_name, primary_no, secondary_no)
+
+        class R:
+            success = True
+            message = "You are registered successfully."
+
+        return R()
+
+    monkeypatch.setattr(svc, "register_new_client", fake_register)
+
+    run(make_message("/start", contact_phone="9988776655"))
+    run(make_message("3"))
+
+    out = run(make_message("Jane Doe"))
+    texts = " ".join(o.text for o in out).lower()
+    assert "preferred contact" in texts
+    assert "email" not in texts
+
+    out = run(make_message("Yes"))
+    assert captured["registration"] == ("Jane Doe", "9988776655", "9988776655")
+    texts = [o.text for o in out]
+    # Exactly one, non-repetitive signup confirmation — no duplicated
+    # "Registration complete" sentence stacked on the CRM message.
+    confirmations = [t for t in texts if "registered successfully" in t.lower()]
+    assert len(confirmations) == 1
+    assert "Registration complete" not in " ".join(texts)
+
+
+def test_signup_no_path_prompts_for_the_secondary_number(monkeypatch):
+    set_client_type(monkeypatch, "new_user", salutation=None)
+    captured = {}
+
+    async def fake_register(client_name, primary_no, secondary_no=None):
+        captured["registration"] = (client_name, primary_no, secondary_no)
+
+        class R:
+            success = True
+            message = "You are registered successfully."
+
+        return R()
+
+    monkeypatch.setattr(svc, "register_new_client", fake_register)
+
+    run(make_message("/start", contact_phone="9988776655"))
+    run(make_message("3"))
+    run(make_message("Jane Doe"))
+
+    out = run(make_message("No"))
+    assert "mobile number" in out[0].text.lower()
+
+    out = run(make_message("1234"))
+    assert "valid" in out[0].text.lower()
+    assert "registration" not in captured
+
+    run(make_message("9876543210"))
+    assert captured["registration"] == ("Jane Doe", "9988776655", "9876543210")

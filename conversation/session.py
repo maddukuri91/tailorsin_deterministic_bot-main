@@ -23,8 +23,6 @@ class SessionState:
     awaiting_contact: bool = False
     has_seen_known_customer_menu: bool = False
     awaiting_registration_name: bool = False
-    awaiting_registration_email: bool = False
-    pending_registration_name: str | None = None
     awaiting_pickup_date: bool = False
     awaiting_pickup_time: bool = False
     awaiting_alteration_pickup_notes: bool = False
@@ -64,6 +62,16 @@ class SessionState:
     pending_address_lat: float | None = None
     pending_address_lng: float | None = None
     awaiting_manual_coordinates: bool = False
+    # Custom fabric estimate / bulk order enquiry capture flow. Both CRM
+    # endpoints require client_name and secondary_no, so the bot collects the
+    # missing pieces before submitting.
+    awaiting_enquiry_name: bool = False
+    awaiting_enquiry_secondary_choice: bool = False
+    awaiting_enquiry_secondary_number: bool = False
+    pending_enquiry_intent: str | None = None
+    pending_enquiry_name: str | None = None
+    pending_enquiry_primary_no: str | None = None
+    pending_enquiry_secondary_no: str | None = None
     # Which menu the customer is currently looking at: "main" or the id of a
     # nested menu they opened. Numeric replies are resolved against it.
     current_menu: str = MAIN_MENU_ID

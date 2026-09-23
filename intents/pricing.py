@@ -26,4 +26,4 @@ def _category_label(catid: int) -> str:
 async def build_pricing_response(client_type: str) -> str:
     catalogue_url = f"{BASE_CATALOGUE_URL}?view=html"
 
-    return f"📋 *Price catalogue*\nView current tailoring prices here:\n{catalogue_url}"
+    return f"📋 **Price List, Terms & Conditions**\nClick this link to view:\n{catalogue_url}"
